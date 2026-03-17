@@ -12,3 +12,6 @@ wheels/
 
 # Model checkpoints
 *.pt
+
+# Training logs
+logs/
