@@ -6,11 +6,11 @@ from typing import Dict, Sequence
 from absl import app
 from absl import flags
 import numpy as np
-import torch
 
 import matplotlib.pyplot as plt
 from open_spiel.python import rl_environment
-from open_spiel.python.pytorch import dqn
+
+from shared.dqn import SelfPlayDQN, make_shared_dqn_agent
 
 FLAGS = flags.FLAGS
 
@@ -29,92 +29,6 @@ DQN_PARAMS = {
     "off_bid_penalty": False,
     "points_per_trick": 1,
 }
-
-
-class SelfPlayDQN:
-    """Single DQN shared across all players for symmetric self-play.
-
-    One network and one replay buffer are updated from every player's
-    perspective each episode, instead of training N independent networks.
-    Per-player _prev_timestep/_prev_action slots are swapped in/out around
-    each DQN.step() call so transitions are formed correctly.
-    """
-
-    def __init__(self, dqn_agent: dqn.DQN, num_players: int) -> None:
-        self._agent = dqn_agent
-        self._num_players = num_players
-        self._prev_timesteps = [None] * num_players
-        self._prev_actions = [None] * num_players
-
-    def step(self, time_step, is_evaluation: bool = False):
-        if time_step.last():
-            # Commit final transitions for every player then reset slots.
-            for p in range(self._num_players):
-                self._agent.player_id = p
-                self._agent._prev_timestep = self._prev_timesteps[p]
-                self._agent._prev_action = self._prev_actions[p]
-                self._agent.step(time_step, is_evaluation=is_evaluation)
-            self._prev_timesteps = [None] * self._num_players
-            self._prev_actions = [None] * self._num_players
-            return
-
-        player_id = time_step.observations["current_player"]
-        self._agent.player_id = player_id
-        self._agent._prev_timestep = self._prev_timesteps[player_id]
-        self._agent._prev_action = self._prev_actions[player_id]
-
-        agent_out = self._agent.step(time_step, is_evaluation=is_evaluation)
-
-        self._prev_timesteps[player_id] = self._agent._prev_timestep
-        self._prev_actions[player_id] = self._agent._prev_action
-        return agent_out
-
-    @property
-    def loss(self):
-        return self._agent.loss
-
-    def save(self, path: str) -> None:
-        torch.save(
-            {
-                "q_network": self._agent._q_network.state_dict(),
-                "target_q_network": self._agent._target_q_network.state_dict(),
-                "optimizer": self._agent._optimizer.state_dict(),
-                "step_counter": self._agent._step_counter,
-            },
-            path,
-        )
-        logging.info("Agent saved to %s", path)
-
-    def load(self, path: str) -> None:
-        checkpoint = torch.load(path, weights_only=False)
-        self._agent._q_network.load_state_dict(checkpoint["q_network"])
-        self._agent._target_q_network.load_state_dict(checkpoint["target_q_network"])
-        self._agent._optimizer.load_state_dict(checkpoint["optimizer"])
-        self._agent._step_counter = checkpoint["step_counter"]
-        logging.info("Agent loaded from %s", path)
-
-
-def make_shared_dqn_agent(
-    state_size: int, num_actions: int, num_episodes: int
-) -> SelfPlayDQN:
-    # Estimate total training steps: ~10 steps/episode across 3 players.
-    total_steps = num_episodes * 10
-    agent = dqn.DQN(
-        player_id=0,
-        state_representation_size=state_size,
-        num_actions=num_actions,
-        hidden_layers_sizes=[256, 256],
-        replay_buffer_capacity=50000,
-        batch_size=128,
-        learning_rate=0.001,
-        optimizer_str="adam",
-        epsilon_start=1.0,
-        epsilon_end=0.05,
-        epsilon_decay_duration=int(total_steps * 0.8),
-        update_target_network_every=500,
-        learn_every=10,
-    )
-    return SelfPlayDQN(agent, NUM_PLAYERS)
 
 
 def train(
@@ -194,7 +108,6 @@ def plot_curves(
     if num_plots == 1:
         axes = [axes]
 
-    # Reward plot
     ax = axes[0]
     for i in range(NUM_PLAYERS):
         smoothed = _smooth(rewards[:, i], smooth_window)
@@ -205,7 +118,6 @@ def plot_curves(
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # Loss plot
     if has_loss:
         ax = axes[1]
         for i in range(NUM_PLAYERS):
@@ -286,7 +198,7 @@ def main(_: Sequence[str]) -> None:
     env = rl_environment.Environment("oh_hell", **DQN_PARAMS)
     num_actions = env.action_spec()["num_actions"]
     state_size = env.observation_spec()["info_state"][0]
-    agents = make_shared_dqn_agent(state_size, num_actions, FLAGS.num_episodes)
+    agents = make_shared_dqn_agent(state_size, num_actions, FLAGS.num_episodes, NUM_PLAYERS)
 
     if os.path.exists(FLAGS.checkpoint):
         agents.load(FLAGS.checkpoint)

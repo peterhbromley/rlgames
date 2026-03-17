@@ -1,0 +1,48 @@
+.container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.label {
+  color: #f0ead6;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bidButton {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid #c8a840;
+  background: rgba(240, 192, 64, 0.15);
+  color: #f0c040;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s ease, transform 0.1s ease;
+}
+
+.bidButton:hover:not(:disabled) {
+  background: rgba(240, 192, 64, 0.3);
+  transform: translateY(-1px);
+}
+
+.bidButton:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.bidButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bidButton:focus-visible {
+  outline: 2px solid #f0c040;
+  outline-offset: 2px;
+}

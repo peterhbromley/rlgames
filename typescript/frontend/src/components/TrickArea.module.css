@@ -1,0 +1,64 @@
+.container {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+  flex-wrap: wrap;
+}
+
+.label {
+  display: block;
+  color: #c8d8b0;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+}
+
+.trumpSection {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.noTrump {
+  color: #888;
+  font-size: 14px;
+}
+
+.trickSection {
+  flex: 1;
+}
+
+.trickCards {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.trickEntry {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.playerLabel {
+  color: #d0e8c0;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.emptySlot {
+  width: 48px;
+  height: 68px;
+  border-radius: 6px;
+  border: 1px dashed rgba(255, 255, 255, 0.2);
+}
+
+.emptyTrick {
+  color: #888;
+  font-size: 14px;
+  line-height: 68px;
+}

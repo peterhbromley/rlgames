@@ -1,0 +1,100 @@
+.card {
+  width: 64px;
+  height: 90px;
+  border-radius: 6px;
+  border: 1px solid #bbb;
+  box-shadow: 1px 2px 4px rgba(0, 0, 0, 0.35);
+  background: #fff;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.card.small {
+  width: 48px;
+  height: 68px;
+}
+
+.faceDown {
+  background: repeating-linear-gradient(
+    45deg,
+    #1a4a8a,
+    #1a4a8a 4px,
+    #1e56a0 4px,
+    #1e56a0 8px
+  );
+  border-color: #1a4a8a;
+}
+
+.red {
+  color: #c0392b;
+}
+
+.black {
+  color: #1a1a1a;
+}
+
+.rankTop {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.card.small .rankTop {
+  font-size: 11px;
+  top: 3px;
+  left: 4px;
+}
+
+.suitCenter {
+  font-size: 22px;
+  line-height: 1;
+}
+
+.card.small .suitCenter {
+  font-size: 16px;
+}
+
+.rankBottom {
+  position: absolute;
+  bottom: 4px;
+  right: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  transform: rotate(180deg);
+}
+
+.card.small .rankBottom {
+  font-size: 11px;
+  bottom: 3px;
+  right: 4px;
+}
+
+.clickable {
+  cursor: pointer;
+  transition: transform 0.1s ease, box-shadow 0.1s ease;
+  outline: 2px solid transparent;
+}
+
+.clickable:hover {
+  transform: translateY(-6px);
+  box-shadow: 2px 6px 12px rgba(0, 0, 0, 0.45);
+  border-color: #f0c040;
+  outline: 2px solid #f0c040;
+}
+
+.clickable:focus-visible {
+  outline: 2px solid #f0c040;
+  transform: translateY(-4px);
+}
+
+.clickable:active {
+  transform: translateY(-2px);
+}
