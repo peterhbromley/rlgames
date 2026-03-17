@@ -7,7 +7,8 @@
 #   tail -f /var/log/rlgames-startup.log
 
 set -euo pipefail
-exec > >(tee -a /var/log/rlgames-startup.log) 2>&1
+export HOME=/root
+exec > >(tee -a /tmp/rlgames-startup.log) 2>&1
 
 echo "=== rlgames startup: $(date) ==="
 
@@ -25,8 +26,7 @@ nvidia-smi
 
 # ── Install uv ────────────────────────────────────────────────────────────────
 echo "Installing uv..."
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
+curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 
 # ── Clone repo ────────────────────────────────────────────────────────────────
 REPO_DIR="/opt/rlgames"

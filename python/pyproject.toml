@@ -3,7 +3,7 @@ name = "rlgames"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "numpy",
     "open_spiel",
@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "wandb>=0.19",
+    "dm-tree",
 ]
 
 [dependency-groups]

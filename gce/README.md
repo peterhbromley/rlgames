@@ -81,19 +81,31 @@ uv run python -m training.train --config training/configs/oh_hell_full.yaml
 
 Training logs to stdout and saves a checkpoint to `training/checkpoints/oh_hell_full.pt` every `log_interval` episodes (default: 10,000). If the VM is preempted and you restart, re-run the same command — it will automatically resume from the latest checkpoint.
 
-To run training in the background so it survives SSH disconnects:
+To run in the background so training survives SSH disconnects:
 
 ```bash
 nohup uv run python -m training.train --config training/configs/oh_hell_full.yaml \
-  > training.log 2>&1 &
-echo $! > training.pid
+  > logs/training.log 2>&1 &
+
+echo $!  # prints the PID — save this if you want to stop the run later
 ```
 
-Monitor it:
+Monitor progress after reconnecting:
 
 ```bash
-tail -f training.log
-# Or open your WandB project in a browser
+tail -f logs/training.log
+```
+
+Check if it's still running:
+
+```bash
+ps aux | grep training.train
+```
+
+Stop it early:
+
+```bash
+kill <PID>
 ```
 
 ---
