@@ -152,5 +152,14 @@ The driver installation runs at first boot and can take a few minutes. Wait ~2 m
 **VM preempted mid-training:**
 Restart the VM (`gcloud compute instances start rlgames-trainer --zone=us-central1-a`), SSH back in, and re-run the training command. It will resume from the last checkpoint automatically.
 
+**Permission denied running uv or writing files:**
+The startup script runs as root, so `/opt/rlgames` may be owned by root. Fix with:
+```bash
+sudo chown -R $USER:$USER /opt/rlgames
+```
+
+**Spot VM unavailable in zone:**
+Try another zone — T4 availability shifts constantly. See the zone-probing loop in the troubleshooting section above, or try `us-central1-b`, `us-east1-c`, `us-east1-d`, or `us-west1-b`.
+
 **Out of GPU memory:**
 Reduce `batch_size` in your config YAML (e.g. `128` instead of `256`).

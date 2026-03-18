@@ -33,10 +33,23 @@ REPO_DIR="/opt/rlgames"
 echo "Cloning repo to $REPO_DIR..."
 git clone https://github.com/peterhbromley/rlgames.git "$REPO_DIR"
 
-# ── Install Python dependencies ───────────────────────────────────────────────
+# ── Transfer ownership to the default SSH user ───────────────────────────────
+# The startup script runs as root; this makes the repo accessible to the
+# user that SSHs in (GCE default: the account that created the VM).
+SSH_USER=$(logname 2>/dev/null || who am i | awk '{print $1}' || echo "")
+if [ -n "$SSH_USER" ]; then
+    chown -R "$SSH_USER:$SSH_USER" "$REPO_DIR"
+    echo "Transferred ownership of $REPO_DIR to $SSH_USER"
+fi
+
+# ── Install Python dependencies (as the SSH user, not root) ──────────────────
 echo "Installing Python dependencies..."
 cd "$REPO_DIR/python"
-uv sync
+if [ -n "$SSH_USER" ]; then
+    sudo -u "$SSH_USER" uv sync
+else
+    uv sync
+fi
 
 # ── Verify CUDA is visible from PyTorch ──────────────────────────────────────
 echo "Verifying PyTorch CUDA access..."

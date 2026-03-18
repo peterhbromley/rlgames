@@ -85,6 +85,8 @@ def make_shared_dqn_agent(
     epsilon_decay_fraction: float = 0.8,
     update_target_network_every: int = 500,
     learn_every: int = 10,
+    gradient_clipping: float | None = None,
+    loss_str: str = "mse",
     device: str = "cpu",
 ) -> SelfPlayDQN:
     if hidden_layers_sizes is None:
@@ -99,11 +101,13 @@ def make_shared_dqn_agent(
         batch_size=batch_size,
         learning_rate=learning_rate,
         optimizer_str="adam",
+        loss_str=loss_str,
         epsilon_start=epsilon_start,
         epsilon_end=epsilon_end,
         epsilon_decay_duration=int(total_steps * epsilon_decay_fraction),
         update_target_network_every=update_target_network_every,
         learn_every=learn_every,
+        gradient_clipping=gradient_clipping,
         device=device,
     )
     return SelfPlayDQN(agent, num_players)

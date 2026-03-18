@@ -37,6 +37,10 @@ def train(cfg: RunConfig) -> None:
         num_actions,
     )
 
+    # ── Config summary ────────────────────────────────────────────────────────
+    logging.info("Game config:\n%s", cfg.game.model_dump_json(indent=2))
+    logging.info("Agent config:\n%s", cfg.agent.model_dump_json(indent=2))
+
     # ── Agent ─────────────────────────────────────────────────────────────────
     agent = cfg.agent.make_agent(
         state_size=state_size,

@@ -1,0 +1,39 @@
+# Oh Hell — fixed 3 tricks, stability-focused hyperparameters.
+# Changes vs oh_hell_3tricks:
+#   - gradient_clipping: 10.0  (prevents Q-value divergence)
+#   - loss_str: huber           (downweights large errors, more robust than MSE)
+#   - learning_rate: 0.0001    (was 0.0005 — slower but more stable updates)
+#   - hidden_layers_sizes: [256, 256]  (was [512, 512, 256] — faster iteration)
+#   - update_target_network_every: 500  (was 1000 — fresher targets)
+
+game:
+  name: oh_hell
+  players: 4
+  num_cards_per_suit: 13
+  num_suits: 4
+  num_tricks_fixed: 3
+  off_bid_penalty: false
+  points_per_trick: 1
+
+agent:
+  hidden_layers_sizes: [256, 256]
+  replay_buffer_capacity: 200000
+  batch_size: 256
+  learning_rate: 0.0001
+  gradient_clipping: 10.0
+  loss_str: huber
+  epsilon_start: 1.0
+  epsilon_end: 0.02
+  epsilon_decay_fraction: 0.7
+  update_target_network_every: 500
+  learn_every: 10
+
+training:
+  num_episodes: 200000
+  device: cuda
+  checkpoint: checkpoints/oh_hell_3tricks_stable.pt
+  log_interval: 10000
+  wandb:
+    enabled: true
+    project: rlgames
+    run_name: oh_hell_3tricks_stable

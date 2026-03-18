@@ -51,6 +51,8 @@ class AgentConfig(BaseModel):
     epsilon_decay_fraction: float = 0.8   # fraction of total steps over which ε decays
     update_target_network_every: int = 500
     learn_every: int = 10
+    gradient_clipping: Optional[float] = None
+    loss_str: str = "mse"
 
     def make_agent(
         self,
@@ -75,6 +77,8 @@ class AgentConfig(BaseModel):
             epsilon_decay_fraction=self.epsilon_decay_fraction,
             update_target_network_every=self.update_target_network_every,
             learn_every=self.learn_every,
+            gradient_clipping=self.gradient_clipping,
+            loss_str=self.loss_str,
             device=device,
         )
 
