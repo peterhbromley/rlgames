@@ -276,11 +276,16 @@ class OhHellAdapter(GameAdapter):
         "points_per_trick": 1,
     }
 
-    def __init__(self, params: dict | None = None) -> None:
+    def __init__(self, params: dict | None = None, max_tricks: int | None = None) -> None:
         self.params = {**self.DEFAULT_PARAMS, **(params or {})}
+        self._max_tricks = max_tricks
 
-    def create_env(self) -> rl_environment.Environment:
-        return rl_environment.Environment("oh_hell", **self.params)
+    def create_env(self):
+        from shared.env_wrappers import CappedTricksEnv
+        env = rl_environment.Environment("oh_hell", **self.params)
+        if self._max_tricks is not None:
+            return CappedTricksEnv(env, self._max_tricks)
+        return env
 
     def preview_action(self, env, time_step, player: int, action_id: int) -> dict | None:
         """Synthesize the 4-card trick state when a card play will complete the trick.

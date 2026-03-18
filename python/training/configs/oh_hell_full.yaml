@@ -7,6 +7,7 @@ game:
   num_cards_per_suit: 13
   num_suits: 4
   # num_tricks_fixed is omitted → variable tricks (full game)
+  max_tricks: 7    # re-roll hands with more than 7 tricks; keeps full 52-card deck
   off_bid_penalty: false
   points_per_trick: 1
 

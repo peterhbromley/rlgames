@@ -26,14 +26,19 @@ class GameConfig(BaseModel):
     num_tricks_fixed: Optional[int] = None   # None → variable tricks (full game)
     off_bid_penalty: bool = False
     points_per_trick: int = 1
+    max_tricks: Optional[int] = None         # cap hand size without changing the deck
 
     def make_env(self):
         from open_spiel.python import rl_environment
-        params = self.model_dump(exclude={"name"}, exclude_none=True)
-        return rl_environment.Environment(self.name, **params)
+        from shared.env_wrappers import CappedTricksEnv
+        params = self.model_dump(exclude={"name", "max_tricks"}, exclude_none=True)
+        env = rl_environment.Environment(self.name, **params)
+        if self.max_tricks is not None:
+            return CappedTricksEnv(env, self.max_tricks)
+        return env
 
     def to_openspiel_params(self) -> dict[str, Any]:
-        return self.model_dump(exclude={"name"}, exclude_none=True)
+        return self.model_dump(exclude={"name", "max_tricks"}, exclude_none=True)
 
 
 class AgentConfig(BaseModel):

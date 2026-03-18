@@ -179,7 +179,7 @@ class TestActionParsing(unittest.TestCase):
         a = _card_action(39, "HJ")
         self.assertEqual(a.id, 39)
         self.assertEqual(a.label, "HJ")
-        self.assertEqual(a.type, "card")
+        self.assertEqual(a.type, "play")
 
     def test_card_action_ten(self):
         a = _card_action(34, "CT")
@@ -418,7 +418,7 @@ class TestSerializeStateLive(unittest.TestCase):
             ts = self.env.step([bid_action])
             state = self._state(ts)
 
-        self.assertTrue(all(a["type"] == "card" for a in state["legal_actions"]))
+        self.assertTrue(all(a["type"] == "play" for a in state["legal_actions"]))
 
     def test_bids_recorded_after_bidding(self):
         ts = self.env.reset()
