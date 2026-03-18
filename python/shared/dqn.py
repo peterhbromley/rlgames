@@ -67,7 +67,7 @@ class SelfPlayDQN:
         self._agent._q_network.load_state_dict(checkpoint["q_network"])
         self._agent._target_q_network.load_state_dict(checkpoint["target_q_network"])
         self._agent._optimizer.load_state_dict(checkpoint["optimizer"])
-        self._agent.step_counter = checkpoint["step_counter"]
+        self._agent._step_counter = checkpoint["step_counter"]
         logging.info("Agent loaded from %s", path)
 
 
