@@ -50,25 +50,34 @@ class SelfPlayDQN:
     def loss(self):
         return self._agent.loss
 
-    def save(self, path: str) -> None:
+    def save(self, path: str, episode: int = 0) -> None:
         torch.save(
             {
                 "q_network": self._agent._q_network.state_dict(),
                 "target_q_network": self._agent._target_q_network.state_dict(),
                 "optimizer": self._agent._optimizer.state_dict(),
-                "step_counter": self._agent.step_counter,
+                "iteration": self._agent._iteration,
+                "episode": episode,
             },
             path,
         )
-        logging.info("Agent saved to %s", path)
+        logging.info("Agent saved to %s (episode %d)", path, episode)
 
-    def load(self, path: str) -> None:
-        checkpoint = torch.load(path, weights_only=False)
+    def load(self, path: str, device: str = "cpu") -> int:
+        """Load checkpoint. Returns the episode to resume from."""
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
         self._agent._q_network.load_state_dict(checkpoint["q_network"])
         self._agent._target_q_network.load_state_dict(checkpoint["target_q_network"])
         self._agent._optimizer.load_state_dict(checkpoint["optimizer"])
-        self._agent._step_counter = checkpoint["step_counter"]
-        logging.info("Agent loaded from %s", path)
+        self._agent._iteration = checkpoint.get("iteration", 0)
+        episode = checkpoint.get("episode", 0)
+        logging.info(
+            "Agent loaded from %s (episode %d, iteration %d)",
+            path,
+            episode,
+            self._agent._iteration,
+        )
+        return episode
 
 
 def make_shared_dqn_agent(

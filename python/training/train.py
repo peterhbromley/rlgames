@@ -51,9 +51,10 @@ def train(cfg: RunConfig) -> None:
     )
 
     checkpoint_path = cfg.training.checkpoint
+    start_episode = 0
     if os.path.exists(checkpoint_path):
-        logging.info("Resuming from checkpoint: %s", checkpoint_path)
-        agent.load(checkpoint_path)
+        start_episode = agent.load(checkpoint_path, device=cfg.training.device)
+        logging.info("Resuming from episode %d", start_episode)
     else:
         Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
 
@@ -82,7 +83,7 @@ def train(cfg: RunConfig) -> None:
     reward_window = np.zeros(num_players)
     loss_window: list[float] = []
 
-    for ep in range(num_episodes):
+    for ep in range(start_episode, num_episodes):
         time_step = env.reset()
         while not time_step.last():
             agent_out = agent.step(time_step)
@@ -119,9 +120,9 @@ def train(cfg: RunConfig) -> None:
 
             reward_window = np.zeros(num_players)
             loss_window = []
-            agent.save(checkpoint_path)
+            agent.save(checkpoint_path, episode=ep + 1)
 
-    agent.save(checkpoint_path)
+    agent.save(checkpoint_path, episode=num_episodes)
     logging.info("Training complete. Checkpoint: %s", checkpoint_path)
 
     if wb_run is not None:
