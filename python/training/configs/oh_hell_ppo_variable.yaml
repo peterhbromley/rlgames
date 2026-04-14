@@ -28,15 +28,15 @@ agent:
   episodes_per_iter: 4096  # 2× — averages over hand-size variance
   pool_size: 20
   pool_save_interval: 10
-  eval_episodes: 1000
+  eval_episodes: 500
   lr_schedule: cosine
 
 training:
-  num_iterations: 10000
+  num_iterations: 5000
   device: cpu
   num_workers: 14          # reduce to 4 for laptop
   checkpoint: checkpoints/oh_hell_ppo_variable.pt
-  log_interval: 10
+  log_interval: 50
   wandb:
     enabled: true
     project: rlgames

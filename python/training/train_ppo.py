@@ -106,11 +106,13 @@ def _rollout_worker(args: tuple) -> tuple:
         hidden_sizes, points_per_trick,
     ) = args
 
+    import logging as _logging
     import random as _random
     import numpy as _np
     import torch as _torch
     from training.ppo import ActorCritic as _AC, RolloutBuffer as _RB, PolicyPool as _PP
 
+    _logging.disable(_logging.CRITICAL)
     # Prevent intra-op thread parallelism from fighting across workers.
     _torch.set_num_threads(1)
     _random.seed(seed)
@@ -211,10 +213,12 @@ def _eval_worker(args: tuple) -> tuple:
         hidden_sizes, points_per_trick,
     ) = args
 
+    import logging as _logging
     import numpy as _np
     import torch as _torch
     from training.ppo import ActorCritic as _AC, PolicyPool as _PP
 
+    _logging.disable(_logging.CRITICAL)
     _torch.set_num_threads(1)
     _np.random.seed(seed)
     _torch.manual_seed(seed)
@@ -577,6 +581,8 @@ def train(cfg: PPORunConfig) -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(message)s",
     )
+    # Suppress noisy OpenSpiel env logs (e.g. "Using game settings: ...").
+    logging.getLogger("absl").setLevel(logging.WARNING)
 
     # Create one env in the main process to query observation/action sizes.
     env = cfg.game.make_env()
