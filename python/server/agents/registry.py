@@ -18,13 +18,19 @@ def register(game: str, agent_type: str):
     return decorator
 
 
-def load(game: str, agent_type: str, checkpoint_path: str, env: Any) -> Any:
+def load(
+    game: str,
+    agent_type: str,
+    checkpoint_path: str,
+    env: Any,
+    agent_config: dict | None = None,
+) -> Any:
     key = (game, agent_type)
     if key not in _REGISTRY:
         raise KeyError(
             f"No agent loader for {key!r}. Registered: {sorted(_REGISTRY)}"
         )
-    return _REGISTRY[key](checkpoint_path, env)
+    return _REGISTRY[key](checkpoint_path, env, agent_config)
 
 
 def registered() -> list[tuple[str, str]]:

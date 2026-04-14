@@ -15,7 +15,7 @@ from shared.dqn import SelfPlayDQN, make_shared_dqn_agent
 FLAGS = flags.FLAGS
 
 flags.DEFINE_integer("num_episodes", int(5e4), "Number of training episodes.")
-flags.DEFINE_string("checkpoint", "oh_hell_dqn.pt", "Path for saving/loading the agent checkpoint.")
+flags.DEFINE_string("checkpoint", "checkpoints/oh_hell_dqn.pt", "Path for saving/loading the agent checkpoint.")
 flags.DEFINE_boolean("play_only", False, "Skip training and load checkpoint for interactive play.")
 
 NUM_PLAYERS = 4

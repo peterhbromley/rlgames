@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml>=6.0",
     "wandb>=0.19",
     "dm-tree",
+    "pandas>=3.0.2",
 ]
 
 [dependency-groups]

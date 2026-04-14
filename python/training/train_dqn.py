@@ -1,10 +1,9 @@
 """
-Training entry point for the RL games platform.
+DQN training entry point.
 
 Usage:
-    python -m training.train --config configs/oh_hell_small.yaml
-    python -m training.train --config configs/oh_hell_full.yaml
-    python -m training.train --config configs/oh_hell_full.yaml --resume
+    python -m training.train_dqn --config training/configs/oh_hell_small.yaml
+    python -m training.train_dqn --config training/configs/oh_hell_full.yaml
 """
 
 import argparse
@@ -14,10 +13,10 @@ from pathlib import Path
 
 import numpy as np
 
-from training.config import RunConfig
+from training.config import DQNRunConfig
 
 
-def train(cfg: RunConfig) -> None:
+def train(cfg: DQNRunConfig) -> None:
     """Run a full training loop according to cfg."""
     logging.basicConfig(
         level=logging.INFO,
@@ -130,15 +129,15 @@ def train(cfg: RunConfig) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train an RL agent.")
+    parser = argparse.ArgumentParser(description="Train a DQN agent.")
     parser.add_argument(
         "--config",
         required=True,
-        help="Path to a YAML RunConfig (e.g. configs/oh_hell_full.yaml)",
+        help="Path to a YAML DQNRunConfig (e.g. training/configs/oh_hell_small.yaml)",
     )
     args = parser.parse_args()
 
-    cfg = RunConfig.from_yaml(args.config)
+    cfg = DQNRunConfig.from_yaml(args.config)
     train(cfg)
 
 

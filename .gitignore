@@ -15,3 +15,6 @@ wheels/
 
 # Training logs
 logs/
+
+# wandb stuff
+python/wandb/

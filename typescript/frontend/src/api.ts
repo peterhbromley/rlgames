@@ -49,11 +49,24 @@ export interface SessionResponse {
   transitions: Transition[];
 }
 
-export async function createSession(): Promise<SessionResponse> {
+export interface AgentInfo {
+  game: string;
+  agent: string;
+}
+
+export async function getAgents(): Promise<AgentInfo[]> {
+  const res = await fetch(`${API_BASE}/agents`);
+  if (!res.ok) throw new Error(`Failed to get agents: ${res.status}`);
+  return res.json();
+}
+
+export async function createSession(
+  agent: string = "nfsp"
+): Promise<SessionResponse> {
   const res = await fetch(`${API_BASE}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ game: "oh_hell", agent: "dqn", human_players: [0] }),
+    body: JSON.stringify({ game: "oh_hell", agent, human_players: [0] }),
   });
   if (!res.ok) throw new Error(`Failed to create session: ${res.status}`);
   return res.json();

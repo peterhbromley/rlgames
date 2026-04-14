@@ -38,6 +38,32 @@
   text-align: center;
 }
 
+.warningMsg {
+  color: #f0c040;
+  font-size: 14px;
+  max-width: 400px;
+  text-align: center;
+}
+
+/* ── Agent selector ──────────────────────────────────────────── */
+.agentSelector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  color: #c8d8b0;
+}
+
+.agentSelector select {
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid #c8a840;
+  background: rgba(0, 0, 0, 0.3);
+  color: #f0ead6;
+  font-size: 16px;
+  cursor: pointer;
+}
+
 /* ── Primary button ───────────────────────────────────────────── */
 .primaryButton {
   padding: 12px 32px;
@@ -113,4 +139,29 @@
   font-size: 16px;
   font-weight: 600;
   margin: 0;
+}
+
+.statsLine {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #c8d8b0;
+  font-size: 13px;
+  margin: 12px 0 0;
+}
+
+.resetBtn {
+  background: none;
+  border: 1px solid rgba(200, 168, 64, 0.4);
+  border-radius: 4px;
+  color: #c8a840;
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+  white-space: nowrap;
+}
+
+.resetBtn:hover {
+  background: rgba(200, 168, 64, 0.15);
 }

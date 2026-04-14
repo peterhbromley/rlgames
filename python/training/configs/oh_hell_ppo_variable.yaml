@@ -1,0 +1,43 @@
+# Oh Hell — PPO self-play, variable 1–10 trick hands.
+# Uses CappedTricksEnv to cap the underlying randomised deal at 10 tricks.
+# Designed to run on a 32-vCPU GCP spot instance.
+
+game:
+  name: oh_hell
+  players: 4
+  num_cards_per_suit: 13
+  num_suits: 4
+  max_tricks: 10          # no num_tricks_fixed → hand size randomised each reset
+  off_bid_penalty: false
+  points_per_trick: 1
+
+agent:
+  hidden_layers_sizes: [512, 512]
+  lr: 3.0e-4
+  bid_lr: 1.0e-3
+  gamma: 1.0
+  gae_lambda: 0.92        # slightly lower than 0.95 — reduces variance on longer hands
+  clip_epsilon: 0.2
+  entropy_coef: 0.05
+  bid_entropy_coef: 0.15  # higher than 3-trick config — 11 bid options vs 4
+  value_coef: 1.0
+  max_grad_norm: 0.5
+  bid_ppo_epochs: 4
+  play_ppo_epochs: 4
+  batch_size: 256
+  episodes_per_iter: 4096  # 2× — averages over hand-size variance
+  pool_size: 20
+  pool_save_interval: 10
+  eval_episodes: 1000
+  lr_schedule: cosine
+
+training:
+  num_iterations: 10000
+  device: cpu
+  num_workers: 14          # reduce to 4 for laptop
+  checkpoint: checkpoints/oh_hell_ppo_variable.pt
+  log_interval: 10
+  wandb:
+    enabled: true
+    project: rlgames
+    run_name: oh_hell_ppo_variable

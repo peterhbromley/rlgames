@@ -25,6 +25,7 @@ Routes
 
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -48,7 +49,24 @@ from server.session import SessionError, SessionManager
 TRANSITION_DELAY_S = 0.8  # seconds between streamed events
 
 _DEFAULT_CONFIG = [
-    {"game": "oh_hell", "agent": "dqn", "checkpoint": "oh_hell_dqn.pt"},
+    {
+        "game": "oh_hell", "agent": "dqn",
+        "checkpoint": "checkpoints/oh_hell_dqn.pt",
+        "params": {"num_tricks_fixed": 3},
+        "config": "training/configs/oh_hell_3tricks_stable.yaml",
+    },
+    {
+        "game": "oh_hell", "agent": "nfsp",
+        "checkpoint": "checkpoints/oh_hell_nfsp_3tricks.pt",
+        "params": {"num_tricks_fixed": 3},
+        "config": "training/configs/oh_hell_nfsp_3tricks.yaml",
+    },
+    {
+        "game": "oh_hell", "agent": "ppo",
+        "checkpoint": "checkpoints/oh_hell_ppo_3tricks_1.pt",
+        "params": {"num_tricks_fixed": 3},
+        "config": "training/configs/oh_hell_ppo_3tricks.yaml",
+    },
 ]
 
 
@@ -57,6 +75,16 @@ def _load_config() -> list[dict]:
     if raw:
         return json.loads(raw)
     return _DEFAULT_CONFIG
+
+
+def _load_agent_config(config_path: str | None) -> dict | None:
+    """Load the 'agent' section from a training YAML, if a path is provided."""
+    if not config_path:
+        return None
+    import yaml
+    with open(config_path) as f:
+        data = yaml.safe_load(f)
+    return data.get("agent")
 
 
 # ---------------------------------------------------------------------------
@@ -96,11 +124,27 @@ async def lifespan(app: FastAPI):
     config = _load_config()
     for entry in config:
         game, agent_type, checkpoint = entry["game"], entry["agent"], entry["checkpoint"]
-        adapter_cls = get_adapter(game)
-        adapter = adapter_cls()
-        env = adapter.create_env()
-        agent = load_agent(game, agent_type, checkpoint, env)
-        _managers[(game, agent_type)] = SessionManager(agent=agent, adapter=adapter)
+        try:
+            agent_config = _load_agent_config(entry.get("config"))
+            adapter_cls = get_adapter(game)
+            adapter = adapter_cls(params=entry.get("params"))
+            env = adapter.create_env()
+            agent = load_agent(game, agent_type, checkpoint, env, agent_config)
+            _managers[(game, agent_type)] = SessionManager(agent=agent, adapter=adapter)
+            logging.info("Loaded agent: game=%r agent=%r checkpoint=%r", game, agent_type, checkpoint)
+        except FileNotFoundError:
+            logging.warning(
+                "Skipping agent — checkpoint not found: game=%r agent=%r checkpoint=%r",
+                game, agent_type, checkpoint,
+            )
+        except Exception as exc:
+            logging.warning(
+                "Skipping agent — failed to load: game=%r agent=%r checkpoint=%r error=%s",
+                game, agent_type, checkpoint, exc,
+            )
+
+    if not _managers:
+        logging.warning("No agents loaded. All session requests will return 404.")
 
     yield
 
@@ -146,6 +190,12 @@ def _get_manager_for_session(session_id: str) -> tuple[str, str, SessionManager]
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@app.get("/agents")
+def list_agents():
+    """Return the (game, agent) combinations that have a loaded checkpoint."""
+    return [{"game": g, "agent": a} for g, a in sorted(_managers)]
+
 
 @app.post("/sessions", response_model=SessionResponse, status_code=201)
 def new_session(body: NewSessionRequest):

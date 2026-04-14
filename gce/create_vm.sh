@@ -1,107 +1,81 @@
 #!/usr/bin/env bash
-# create_vm.sh — provision a GCE Spot VM with a T4 GPU for RL training.
+# create_vm.sh — provision a GCE CPU-only Spot VM for RL training.
 #
 # Prerequisites (run once on your local machine):
 #   gcloud auth login
 #   gcloud config set project YOUR_PROJECT_ID
 #
 # Usage:
-#   ./gce/create_vm.sh
+#   ZONE=us-central1-a MACHINE_TYPE=e2-highcpu-16 ./gce/create_vm.sh
+#
+# Optional environment variables:
+#   ZONE             — GCE zone (required)
+#   MACHINE_TYPE     — GCE machine type (default: e2-highcpu-16)
+#   WANDB_API_KEY    — forwarded to the VM for experiment tracking
+#   TRAINING_CONFIG  — config path relative to python/ (default: training/configs/oh_hell_ppo_variable.yaml)
+#   INSTANCE_NAME    — override VM name (default: rlgames-trainer)
 #
 # To delete the VM when done:
-#   gcloud compute instances delete rlgames-trainer --zone=ZONE
+#   gcloud compute instances delete rlgames-trainer --zone=ZONE --quiet
 
 set -euo pipefail
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT="${GCLOUD_PROJECT:-$(gcloud config get-value project)}"
-INSTANCE_NAME="rlgames-trainer"
-MACHINE_TYPE="n1-standard-4"  # 4 vCPUs, 15 GB RAM
-GPU_TYPE="nvidia-tesla-t4"
-GPU_COUNT=1
-BOOT_DISK_SIZE="100GB"        # ~20-30 GB for base image, rest for deps + checkpoints
-# Deep Learning VM image: CUDA + PyTorch pre-installed
-IMAGE_FAMILY="pytorch-2-7-cu128-ubuntu-2204-nvidia-570"
-IMAGE_PROJECT="deeplearning-platform-release"
+INSTANCE_NAME="${INSTANCE_NAME:-rlgames-trainer}"
+MACHINE_TYPE="${MACHINE_TYPE:-e2-highcpu-16}"
+BOOT_DISK_SIZE="50GB"
+IMAGE_FAMILY="ubuntu-2204-lts"
+IMAGE_PROJECT="ubuntu-os-cloud"
 
-# Zones to probe in order — US regions with good historical T4 availability.
-CANDIDATE_ZONES=(
-  us-east1-c
-  us-east1-b
-  us-east1-d
-  us-west1-b
-  us-west1-a
-  us-east4-b
-  us-east4-c
-  us-central1-a
-  us-central1-b
-  us-central1-c
-  us-central1-f
-)
+TRAINING_CONFIG="${TRAINING_CONFIG:-training/configs/oh_hell_ppo_variable.yaml}"
+WANDB_API_KEY="${WANDB_API_KEY:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# ── Find an available zone ────────────────────────────────────────────────────
-echo "Project : $PROJECT"
-echo "Probing zones for T4 Spot availability..."
-echo ""
-
-ZONE=""
-for candidate in "${CANDIDATE_ZONES[@]}"; do
-  echo -n "  $candidate ... "
-  result=$(gcloud compute instances create "${INSTANCE_NAME}-probe" \
-    --project="$PROJECT" \
-    --zone="$candidate" \
-    --machine-type="$MACHINE_TYPE" \
-    --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}" \
-    --image-family="$IMAGE_FAMILY" \
-    --image-project="$IMAGE_PROJECT" \
-    --boot-disk-size="$BOOT_DISK_SIZE" \
-    --maintenance-policy="TERMINATE" \
-    --provisioning-model="SPOT" \
-    --instance-termination-action="DELETE" \
-    --no-restart-on-failure \
-    --quiet 2>&1)
-  if echo "$result" | grep -q "Created"; then
-    echo "available"
-    gcloud compute instances delete "${INSTANCE_NAME}-probe" \
-      --zone="$candidate" --quiet 2>/dev/null
-    ZONE="$candidate"
-    break
-  else
-    echo "unavailable"
-  fi
-done
-
-if [ -z "$ZONE" ]; then
-  echo ""
-  echo "No T4 Spot capacity found in any candidate zone. Try again later."
+if [ -z "${ZONE:-}" ]; then
+  echo "Error: ZONE is required. Example:"
+  echo "  ZONE=us-central1-a ./gce/create_vm.sh"
   exit 1
 fi
 
-# ── Create the real VM ────────────────────────────────────────────────────────
+echo "Project       : $PROJECT"
+echo "Zone          : $ZONE"
+echo "Machine type  : $MACHINE_TYPE"
+echo "Training cfg  : $TRAINING_CONFIG"
 echo ""
-echo "Creating $INSTANCE_NAME in $ZONE..."
+
+# ── Build metadata string ─────────────────────────────────────────────────────
+METADATA="training-config=${TRAINING_CONFIG}"
+if [ -n "$WANDB_API_KEY" ]; then
+  METADATA="${METADATA},wandb-api-key=${WANDB_API_KEY}"
+fi
+
+# ── Create the VM ─────────────────────────────────────────────────────────────
+echo "Creating $INSTANCE_NAME..."
 
 gcloud compute instances create "$INSTANCE_NAME" \
   --project="$PROJECT" \
   --zone="$ZONE" \
   --machine-type="$MACHINE_TYPE" \
-  --accelerator="type=${GPU_TYPE},count=${GPU_COUNT}" \
   --image-family="$IMAGE_FAMILY" \
   --image-project="$IMAGE_PROJECT" \
   --boot-disk-size="$BOOT_DISK_SIZE" \
-  --boot-disk-type="pd-ssd" \
-  --maintenance-policy="TERMINATE" \
+  --boot-disk-type="pd-balanced" \
   --provisioning-model="SPOT" \
   --instance-termination-action="STOP" \
+  --no-restart-on-failure \
   --scopes="https://www.googleapis.com/auth/cloud-platform" \
-  --metadata="install-nvidia-driver=True" \
+  --metadata="$METADATA" \
   --metadata-from-file="startup-script=${SCRIPT_DIR}/startup.sh"
 
 echo ""
-echo "VM created. Connect with:"
+echo "VM created. Monitor startup (takes ~5 min):"
+echo "  gcloud compute ssh $INSTANCE_NAME --zone=$ZONE -- 'tail -f /tmp/rlgames-startup.log'"
+echo ""
+echo "Once setup is complete, SSH in and attach to the training session:"
 echo "  gcloud compute ssh $INSTANCE_NAME --zone=$ZONE"
+echo "  screen -r training"
 echo ""
 echo "To delete when done:"
-echo "  gcloud compute instances delete $INSTANCE_NAME --zone=$ZONE"
+echo "  gcloud compute instances delete $INSTANCE_NAME --zone=$ZONE --quiet"
