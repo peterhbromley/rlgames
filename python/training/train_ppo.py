@@ -16,6 +16,7 @@ Usage:
 import argparse
 import logging
 import os
+import resource
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -583,6 +584,10 @@ def train(cfg: PPORunConfig) -> None:
     )
     # Suppress noisy OpenSpiel env logs (e.g. "Using game settings: ...").
     logging.getLogger("absl").setLevel(logging.WARNING)
+
+    # Raise the open file descriptor limit — parallel workers use many pipes.
+    _, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    resource.setrlimit(resource.RLIMIT_NOFILE, (min(65536, hard), hard))
 
     # Create one env in the main process to query observation/action sizes.
     env = cfg.game.make_env()
