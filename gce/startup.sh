@@ -72,7 +72,7 @@ if [ -n "$WANDB_API_KEY" ]; then
 fi
 
 # ── Write convenience start script ───────────────────────────────────────────
-TRAIN_CMD="cd $REPO_DIR/python && $REPO_DIR/python/.venv/bin/python -m training.train_ppo --config $TRAINING_CONFIG"
+TRAIN_CMD="cd $REPO_DIR/python && uv run python -m training.train_ppo --config $TRAINING_CONFIG"
 TRAIN_LOG="/tmp/rlgames-training.log"
 
 cat > "$USER_HOME/start_training.sh" << EOF
