@@ -16,6 +16,7 @@ Usage:
 import argparse
 import logging
 import os
+import random
 import resource
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
@@ -325,7 +326,13 @@ def _make_worker_args(
     """Build the args list for _rollout_worker or _eval_worker."""
     bid_sd = {k: v.cpu() for k, v in bid_net.state_dict().items()}
     play_sd = {k: v.cpu() for k, v in play_net.state_dict().items()}
-    pool_entries = pool.state_dict()
+    all_entries = pool.state_dict()
+    # Cap pool entries sent to workers to limit IPC overhead — large networks
+    # make pickling the full pool expensive (scales with workers × entries × params).
+    # Workers only sample one entry per episode anyway, so a small random subset
+    # gives equivalent diversity.
+    _MAX_POOL_SEND = 5
+    pool_entries = random.sample(all_entries, min(_MAX_POOL_SEND, len(all_entries)))
 
     base, rem = divmod(num_episodes, num_workers)
     counts = [base + (1 if i < rem else 0) for i in range(num_workers)]
