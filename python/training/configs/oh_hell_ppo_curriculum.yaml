@@ -38,7 +38,7 @@ curriculum:
     max_tricks: 5
   - until_iter: 4000
     max_tricks: 7
-  - until_iter: 5000
+  - until_iter: 6000
     max_tricks: 10
 
 training:
@@ -46,7 +46,7 @@ training:
   device: cpu
   num_workers: 28          # reduce to 4 for laptop, 28 for 32-core
   checkpoint: checkpoints/oh_hell_ppo_curriculum.pt
-  log_interval: 50
+  log_interval: 10
   wandb:
     enabled: true
     project: rlgames
