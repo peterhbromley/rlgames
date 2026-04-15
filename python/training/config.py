@@ -197,10 +197,16 @@ class NFSPRunConfig(BaseModel):
         return cls.model_validate(data)
 
 
+class CurriculumStage(BaseModel):
+    until_iter: int
+    max_tricks: int
+
+
 class PPORunConfig(BaseModel):
     game: GameConfig
     agent: PPOAgentConfig = Field(default_factory=PPOAgentConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    curriculum: list[CurriculumStage] = Field(default_factory=list)
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "PPORunConfig":

@@ -308,6 +308,14 @@ def _bid_correct(reward: float, bid_idx: int, points_per_trick: int) -> bool:
     return abs(reward - (bid_idx * points_per_trick + 10)) < 1e-6
 
 
+def _get_curriculum_max_tricks(curriculum, iteration: int) -> int:
+    """Return max_tricks for the current curriculum stage."""
+    for stage in curriculum:
+        if iteration < stage.until_iter:
+            return stage.max_tricks
+    return curriculum[-1].max_tricks
+
+
 def _make_worker_args(
     bid_net, play_net, pool,
     num_episodes, num_workers, iteration,
@@ -650,6 +658,14 @@ def train(cfg: PPORunConfig) -> None:
     if len(pool) == 0:
         pool.add(bid_net, play_net)
 
+    # Curriculum: determine game config for the current stage.
+    current_game_cfg = cfg.game
+    if cfg.curriculum:
+        curr_max = _get_curriculum_max_tricks(cfg.curriculum, start_iter)
+        current_game_cfg = cfg.game.model_copy(update={"max_tricks": curr_max})
+        env = current_game_cfg.make_env()
+        logging.info("Curriculum: starting with max_tricks=%d (iter %d)", curr_max, start_iter)
+
     wb_run = None
     if cfg.training.wandb.enabled:
         import wandb
@@ -669,7 +685,7 @@ def train(cfg: PPORunConfig) -> None:
 
     # Shared kwargs for parallel collection helpers.
     _parallel_kw = dict(
-        game_cfg=cfg.game,
+        game_cfg=current_game_cfg,
         state_size=state_size,
         num_bids=num_bids,
         deck_size=deck_size,
@@ -682,6 +698,16 @@ def train(cfg: PPORunConfig) -> None:
 
     try:
         for it in range(start_iter, num_iterations):
+            # Curriculum: advance stage if needed.
+            if cfg.curriculum:
+                target_max = _get_curriculum_max_tricks(cfg.curriculum, it)
+                if target_max != current_game_cfg.max_tricks:
+                    current_game_cfg = cfg.game.model_copy(update={"max_tricks": target_max})
+                    _parallel_kw["game_cfg"] = current_game_cfg
+                    if executor is None:
+                        env = current_game_cfg.make_env()
+                    logging.info("Curriculum: advancing to max_tricks=%d at iter %d", target_max, it)
+
             bid_net.eval()
             play_net.eval()
 
@@ -811,6 +837,7 @@ def train(cfg: PPORunConfig) -> None:
                             "pool_size": len(pool),
                             "lr/bid": bid_opt.param_groups[0]["lr"],
                             "lr/play": play_opt.param_groups[0]["lr"],
+                            "curriculum/max_tricks": current_game_cfg.max_tricks or 0,
                         },
                         step=ep_total,
                     )
