@@ -13,8 +13,8 @@ game:
 
 agent:
   hidden_layers_sizes: [1024, 1024]
-  lr: 3.0e-4
-  bid_lr: 1.0e-3
+  lr: 1.0e-4
+  bid_lr: 5.0e-4
   gamma: 1.0
   gae_lambda: 0.92
   clip_epsilon: 0.2
@@ -29,7 +29,7 @@ agent:
   pool_size: 20
   pool_save_interval: 10
   eval_episodes: 500
-  lr_schedule: cosine
+  lr_schedule: null
 
 curriculum:
   - until_iter: 1000
