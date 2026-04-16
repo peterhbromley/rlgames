@@ -690,6 +690,14 @@ def train(cfg: PPORunConfig) -> None:
                     break
                 stage_start = stage.until_iter
             steps_into_stage = start_iter - stage_start
+            # Reset optimizer LRs to base before creating schedulers —
+            # load_state_dict restores the checkpoint's decayed LR into
+            # param groups, which would prevent the warm restart from
+            # taking effect.
+            for pg in bid_opt.param_groups:
+                pg["lr"] = bid_lr
+            for pg in play_opt.param_groups:
+                pg["lr"] = ac.lr
             bid_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
                 bid_opt, T_max=stage_len, eta_min=0, last_epoch=steps_into_stage - 1,
             )
@@ -697,8 +705,8 @@ def train(cfg: PPORunConfig) -> None:
                 play_opt, T_max=stage_len, eta_min=0, last_epoch=steps_into_stage - 1,
             )
             logging.info(
-                "Curriculum resume: max_tricks=%d, stage_len=%d, steps_into_stage=%d, lr=%.6f",
-                curr_max, stage_len, steps_into_stage, bid_opt.param_groups[0]["lr"],
+                "Curriculum resume: max_tricks=%d, stage_len=%d, steps_into_stage=%d, bid_lr=%.6f, play_lr=%.6f",
+                curr_max, stage_len, steps_into_stage, bid_opt.param_groups[0]["lr"], play_opt.param_groups[0]["lr"],
             )
         else:
             logging.info("Curriculum: starting with max_tricks=%d (iter %d)", curr_max, start_iter)
