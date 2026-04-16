@@ -42,7 +42,7 @@ curriculum:
     max_tricks: 10
 
 training:
-  num_iterations: 5000
+  num_iterations: 6000
   device: cpu
   num_workers: 28          # reduce to 4 for laptop, 28 for 32-core
   checkpoint: checkpoints/oh_hell_ppo_curriculum.pt

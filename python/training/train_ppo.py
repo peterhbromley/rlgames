@@ -316,6 +316,16 @@ def _get_curriculum_max_tricks(curriculum, iteration: int) -> int:
     return curriculum[-1].max_tricks
 
 
+def _get_curriculum_stage_length(curriculum, iteration: int) -> int:
+    """Return the number of iterations in the current curriculum stage."""
+    prev_end = 0
+    for stage in curriculum:
+        if iteration < stage.until_iter:
+            return stage.until_iter - prev_end
+        prev_end = stage.until_iter
+    return curriculum[-1].until_iter - (curriculum[-2].until_iter if len(curriculum) > 1 else 0)
+
+
 def _make_worker_args(
     bid_net, play_net, pool,
     num_episodes, num_workers, iteration,
@@ -636,11 +646,15 @@ def train(cfg: PPORunConfig) -> None:
 
     bid_sched = play_sched = None
     if ac.lr_schedule == "cosine":
+        t_max = (
+            _get_curriculum_stage_length(cfg.curriculum, 0)
+            if cfg.curriculum else num_iterations
+        )
         bid_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            bid_opt, T_max=num_iterations, eta_min=0,
+            bid_opt, T_max=t_max, eta_min=0,
         )
         play_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
-            play_opt, T_max=num_iterations, eta_min=0,
+            play_opt, T_max=t_max, eta_min=0,
         )
 
     pool = PolicyPool(max_size=ac.pool_size)
@@ -650,7 +664,8 @@ def train(cfg: PPORunConfig) -> None:
     if os.path.exists(checkpoint_path):
         start_iter = load_ppo(
             bid_net, play_net, bid_opt, play_opt, pool, checkpoint_path, device,
-            bid_sched=bid_sched, play_sched=play_sched,
+            bid_sched=bid_sched if not cfg.curriculum else None,
+            play_sched=play_sched if not cfg.curriculum else None,
         )
     else:
         Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
@@ -659,12 +674,34 @@ def train(cfg: PPORunConfig) -> None:
         pool.add(bid_net, play_net)
 
     # Curriculum: determine game config for the current stage.
+    # Also rebuild schedulers for the current stage so that resume works
+    # correctly with warm restarts (don't load stale scheduler state).
     current_game_cfg = cfg.game
     if cfg.curriculum:
         curr_max = _get_curriculum_max_tricks(cfg.curriculum, start_iter)
         current_game_cfg = cfg.game.model_copy(update={"max_tricks": curr_max})
         env = current_game_cfg.make_env()
-        logging.info("Curriculum: starting with max_tricks=%d (iter %d)", curr_max, start_iter)
+        if ac.lr_schedule == "cosine" and start_iter > 0:
+            stage_len = _get_curriculum_stage_length(cfg.curriculum, start_iter)
+            # Figure out how far into this stage we are.
+            stage_start = 0
+            for stage in cfg.curriculum:
+                if start_iter < stage.until_iter:
+                    break
+                stage_start = stage.until_iter
+            steps_into_stage = start_iter - stage_start
+            bid_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                bid_opt, T_max=stage_len, eta_min=0, last_epoch=steps_into_stage - 1,
+            )
+            play_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                play_opt, T_max=stage_len, eta_min=0, last_epoch=steps_into_stage - 1,
+            )
+            logging.info(
+                "Curriculum resume: max_tricks=%d, stage_len=%d, steps_into_stage=%d, lr=%.6f",
+                curr_max, stage_len, steps_into_stage, bid_opt.param_groups[0]["lr"],
+            )
+        else:
+            logging.info("Curriculum: starting with max_tricks=%d (iter %d)", curr_max, start_iter)
 
     wb_run = None
     if cfg.training.wandb.enabled:
@@ -706,6 +743,16 @@ def train(cfg: PPORunConfig) -> None:
                     _parallel_kw["game_cfg"] = current_game_cfg
                     if executor is None:
                         env = current_game_cfg.make_env()
+                    # Warm restart: reset cosine schedule for the new stage.
+                    if ac.lr_schedule == "cosine":
+                        stage_len = _get_curriculum_stage_length(cfg.curriculum, it)
+                        bid_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                            bid_opt, T_max=stage_len, eta_min=0,
+                        )
+                        play_sched = torch.optim.lr_scheduler.CosineAnnealingLR(
+                            play_opt, T_max=stage_len, eta_min=0,
+                        )
+                        logging.info("LR warm restart: T_max=%d", stage_len)
                     logging.info("Curriculum: advancing to max_tricks=%d at iter %d", target_max, it)
 
             bid_net.eval()
