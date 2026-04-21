@@ -653,13 +653,6 @@ def train(cfg: PPORunConfig) -> None:
             bid_net, play_net, bid_opt, play_opt, pool, checkpoint_path, device,
             bid_sched=bid_sched, play_sched=play_sched,
         )
-        # Override LR with config values (checkpoint may have decayed/stale LR).
-        if ac.lr_schedule is None:
-            for pg in play_opt.param_groups:
-                pg["lr"] = ac.lr
-            for pg in bid_opt.param_groups:
-                pg["lr"] = bid_lr
-            logging.info("Overriding LR from config: play=%.2e bid=%.2e", ac.lr, bid_lr)
     else:
         Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
 
