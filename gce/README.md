@@ -66,7 +66,7 @@ gcloud services enable compute.googleapis.com
 ## Step 2 — Wait for startup to complete
 
 The VM runs `gce/startup.sh` automatically on first boot. It clones the repo,
-installs uv, and installs all Python dependencies. This takes **3–5 minutes** (or **~10 minutes** with GPU driver install).
+installs uv, and installs all Python dependencies.
 
 To watch progress:
 
@@ -74,7 +74,9 @@ To watch progress:
 gcloud compute ssh rlgames-trainer --zone=us-central1-a -- 'tail -f /tmp/rlgames-startup.log'
 ```
 
-When you see `=== rlgames startup complete ===` the VM is ready.
+**CPU VMs** complete in one boot (~5 min). The VM is ready when you see `=== rlgames startup complete ===`.
+
+**GPU VMs** require two boots (~10 min total): the first boot installs everything including NVIDIA drivers and reboots automatically to load the kernel module. The VM is ready when you see `=== rlgames startup complete ===` after the second boot.
 
 ---
 
