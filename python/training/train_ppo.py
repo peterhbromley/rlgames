@@ -23,8 +23,43 @@ from pathlib import Path
 import numpy as np
 import torch
 
+import copy
+import random as stdlib_random
+
 from training.config import PPORunConfig
-from training.ppo import ActorCritic, PolicyPool, RolloutBuffer, ppo_update
+from training.ppo import ActorCritic, RolloutBuffer, ppo_update
+
+
+# ---------------------------------------------------------------------------
+# Oh Hell paired pool (stores bid + play snapshots together)
+# ---------------------------------------------------------------------------
+
+class PairedPool:
+    """Policy pool that stores bid/play network pairs as a unit."""
+
+    def __init__(self, max_size: int = 20):
+        self.max_size = max_size
+        self._entries: list[dict[str, dict]] = []
+
+    def __len__(self):
+        return len(self._entries)
+
+    def add(self, bid_net: ActorCritic, play_net: ActorCritic):
+        self._entries.append({
+            "bid": copy.deepcopy(bid_net.state_dict()),
+            "play": copy.deepcopy(play_net.state_dict()),
+        })
+        if len(self._entries) > self.max_size:
+            self._entries.pop(0)
+
+    def sample(self) -> dict[str, dict]:
+        return stdlib_random.choice(self._entries)
+
+    def state_dict(self) -> list[dict]:
+        return list(self._entries)
+
+    def load_state_dict(self, entries: list[dict]):
+        self._entries = list(entries)
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +71,7 @@ def save_ppo(
     play_net: ActorCritic,
     bid_opt: torch.optim.Optimizer,
     play_opt: torch.optim.Optimizer,
-    pool: PolicyPool,
+    pool: PairedPool,
     path: str,
     iteration: int,
     bid_sched=None,
@@ -63,7 +98,7 @@ def load_ppo(
     play_net: ActorCritic,
     bid_opt: torch.optim.Optimizer,
     play_opt: torch.optim.Optimizer,
-    pool: PolicyPool,
+    pool: PairedPool,
     path: str,
     device: str = "cpu",
     bid_sched=None,
@@ -111,7 +146,7 @@ def _rollout_worker(args: tuple) -> tuple:
     import random as _random
     import numpy as _np
     import torch as _torch
-    from training.ppo import ActorCritic as _AC, RolloutBuffer as _RB, PolicyPool as _PP
+    from training.ppo import ActorCritic as _AC, RolloutBuffer as _RB
 
     _logging.disable(_logging.CRITICAL)
     # Prevent intra-op thread parallelism from fighting across workers.
@@ -137,10 +172,8 @@ def _rollout_worker(args: tuple) -> tuple:
     opp_bid_net.eval()
     opp_play_net.eval()
 
-    pool = _PP(max_size=len(pool_entries) + 1)
-    pool._entries = list(pool_entries)
-
-    buffer = _RB()
+    bid_buf = _RB()
+    play_buf = _RB()
     rewards = _np.zeros(num_episodes)
     bid_correct_count = 0
     bid_total = 0
@@ -149,8 +182,8 @@ def _rollout_worker(args: tuple) -> tuple:
         learner = ep_idx % num_players
         learner_bid_idx = None
 
-        if len(pool) > 0:
-            snapshot = pool.sample()
+        if pool_entries:
+            snapshot = _random.choice(pool_entries)
             opp_bid_net.load_state_dict(snapshot["bid"])
             opp_play_net.load_state_dict(snapshot["play"])
 
@@ -175,7 +208,7 @@ def _rollout_worker(args: tuple) -> tuple:
                 action_idx, lp, val = net.act(obs_t, mask_t)
                 if is_learner:
                     learner_bid_idx = action_idx
-                    buffer.add_bid(obs_np, action_idx, lp, val, mask)
+                    bid_buf.add(obs_np, action_idx, lp, val, mask)
                 action = action_idx + deck_size
             else:
                 mask = _np.zeros(deck_size, dtype=_np.bool_)
@@ -184,13 +217,14 @@ def _rollout_worker(args: tuple) -> tuple:
                 net = play_net if is_learner else opp_play_net
                 action_idx, lp, val = net.act(obs_t, mask_t)
                 if is_learner:
-                    buffer.add_play(obs_np, action_idx, lp, val, mask)
+                    play_buf.add(obs_np, action_idx, lp, val, mask)
                 action = action_idx
 
             time_step = env.step([action])
 
         reward = time_step.rewards[learner]
-        buffer.finish_episode(reward)
+        bid_buf.finish_episode(reward)
+        play_buf.finish_episode(reward)
         rewards[ep_idx] = reward
 
         if learner_bid_idx is not None:
@@ -198,7 +232,7 @@ def _rollout_worker(args: tuple) -> tuple:
             if abs(reward - (learner_bid_idx * points_per_trick + 10)) < 1e-6:
                 bid_correct_count += 1
 
-    return buffer._bid_eps, buffer._play_eps, rewards, bid_correct_count, bid_total
+    return bid_buf._episodes, play_buf._episodes, rewards, bid_correct_count, bid_total
 
 
 def _eval_worker(args: tuple) -> tuple:
@@ -215,9 +249,10 @@ def _eval_worker(args: tuple) -> tuple:
     ) = args
 
     import logging as _logging
+    import random as _random
     import numpy as _np
     import torch as _torch
-    from training.ppo import ActorCritic as _AC, PolicyPool as _PP
+    from training.ppo import ActorCritic as _AC
 
     _logging.disable(_logging.CRITICAL)
     _torch.set_num_threads(1)
@@ -240,9 +275,6 @@ def _eval_worker(args: tuple) -> tuple:
     opp_bid_net.eval()
     opp_play_net.eval()
 
-    pool = _PP(max_size=len(pool_entries) + 1)
-    pool._entries = list(pool_entries)
-
     rewards = _np.zeros(num_episodes)
     bid_correct_count = 0
     bid_total = 0
@@ -251,8 +283,8 @@ def _eval_worker(args: tuple) -> tuple:
         learner = ep_idx % num_players
         learner_bid_idx = None
 
-        if len(pool) > 0:
-            snapshot = pool.sample()
+        if pool_entries:
+            snapshot = _random.choice(pool_entries)
             opp_bid_net.load_state_dict(snapshot["bid"])
             opp_play_net.load_state_dict(snapshot["play"])
 
@@ -350,7 +382,7 @@ def collect_rollouts(
     play_net: ActorCritic,
     opp_bid_net: ActorCritic,
     opp_play_net: ActorCritic,
-    pool: PolicyPool,
+    pool: PairedPool,
     *,
     num_episodes: int,
     num_players: int,
@@ -358,9 +390,10 @@ def collect_rollouts(
     num_bids: int,
     points_per_trick: int = 1,
     device: str = "cpu",
-) -> tuple[RolloutBuffer, np.ndarray, float]:
+) -> tuple[RolloutBuffer, RolloutBuffer, np.ndarray, float]:
     """Sequential rollout collection (num_workers=1 path)."""
-    buffer = RolloutBuffer()
+    bid_buf = RolloutBuffer()
+    play_buf = RolloutBuffer()
     rewards = np.zeros(num_episodes)
     bid_correct_count = 0
     bid_total = 0
@@ -395,7 +428,7 @@ def collect_rollouts(
                 action_idx, lp, val = net.act(obs_t, mask_t)
                 if is_learner:
                     learner_bid_idx = action_idx
-                    buffer.add_bid(obs_np, action_idx, lp, val, mask)
+                    bid_buf.add(obs_np, action_idx, lp, val, mask)
                 action = action_idx + deck_size
             else:
                 mask = np.zeros(deck_size, dtype=np.bool_)
@@ -404,13 +437,14 @@ def collect_rollouts(
                 net = play_net if is_learner else opp_play_net
                 action_idx, lp, val = net.act(obs_t, mask_t)
                 if is_learner:
-                    buffer.add_play(obs_np, action_idx, lp, val, mask)
+                    play_buf.add(obs_np, action_idx, lp, val, mask)
                 action = action_idx
 
             time_step = env.step([action])
 
         reward = time_step.rewards[learner]
-        buffer.finish_episode(reward)
+        bid_buf.finish_episode(reward)
+        play_buf.finish_episode(reward)
         rewards[ep_idx] = reward
 
         if learner_bid_idx is not None:
@@ -419,14 +453,14 @@ def collect_rollouts(
                 bid_correct_count += 1
 
     bid_acc = bid_correct_count / bid_total if bid_total > 0 else 0.0
-    return buffer, rewards, bid_acc
+    return bid_buf, play_buf, rewards, bid_acc
 
 
 def collect_rollouts_parallel(
     executor: ProcessPoolExecutor,
     bid_net: ActorCritic,
     play_net: ActorCritic,
-    pool: PolicyPool,
+    pool: PairedPool,
     *,
     num_episodes: int,
     num_workers: int,
@@ -438,7 +472,7 @@ def collect_rollouts_parallel(
     num_players: int,
     hidden_sizes: list,
     points_per_trick: int = 1,
-) -> tuple[RolloutBuffer, np.ndarray, float]:
+) -> tuple[RolloutBuffer, RolloutBuffer, np.ndarray, float]:
     """Parallel rollout collection across num_workers subprocesses."""
     args_list = _make_worker_args(
         bid_net, play_net, pool,
@@ -460,12 +494,13 @@ def collect_rollouts_parallel(
         total_correct += bid_correct
         total_bids += bid_total
 
-    buffer = RolloutBuffer()
-    buffer._bid_eps = all_bid_eps
-    buffer._play_eps = all_play_eps
+    bid_buf = RolloutBuffer()
+    bid_buf._episodes = all_bid_eps
+    play_buf = RolloutBuffer()
+    play_buf._episodes = all_play_eps
 
     bid_acc = total_correct / total_bids if total_bids > 0 else 0.0
-    return buffer, np.concatenate(all_rewards), bid_acc
+    return bid_buf, play_buf, np.concatenate(all_rewards), bid_acc
 
 
 def eval_rollouts(
@@ -474,7 +509,7 @@ def eval_rollouts(
     play_net: ActorCritic,
     opp_bid_net: ActorCritic,
     opp_play_net: ActorCritic,
-    pool: PolicyPool,
+    pool: PairedPool,
     *,
     num_episodes: int,
     num_players: int,
@@ -548,7 +583,7 @@ def eval_rollouts_parallel(
     executor: ProcessPoolExecutor,
     bid_net: ActorCritic,
     play_net: ActorCritic,
-    pool: PolicyPool,
+    pool: PairedPool,
     *,
     num_episodes: int,
     num_workers: int,
@@ -644,7 +679,7 @@ def train(cfg: PPORunConfig) -> None:
             play_opt, T_max=num_iterations, eta_min=0,
         )
 
-    pool = PolicyPool(max_size=ac.pool_size)
+    pool = PairedPool(max_size=ac.pool_size)
 
     checkpoint_path = cfg.training.checkpoint
     start_iter = 0
@@ -713,7 +748,7 @@ def train(cfg: PPORunConfig) -> None:
             play_net.eval()
 
             if executor is not None:
-                buf, rewards, train_bid_acc = collect_rollouts_parallel(
+                bid_buf, play_buf, rewards, train_bid_acc = collect_rollouts_parallel(
                     executor, bid_net, play_net, pool,
                     num_episodes=ac.episodes_per_iter,
                     num_workers=num_workers,
@@ -723,7 +758,7 @@ def train(cfg: PPORunConfig) -> None:
             else:
                 opp_bid_net.load_state_dict(bid_net.state_dict())
                 opp_play_net.load_state_dict(play_net.state_dict())
-                buf, rewards, train_bid_acc = collect_rollouts(
+                bid_buf, play_buf, rewards, train_bid_acc = collect_rollouts(
                     env, bid_net, play_net, opp_bid_net, opp_play_net, pool,
                     num_episodes=ac.episodes_per_iter,
                     num_players=num_players,
@@ -737,10 +772,10 @@ def train(cfg: PPORunConfig) -> None:
             bid_net.train()
             play_net.train()
 
-            bid_data = buf.build_bid_dataset(
+            bid_data = bid_buf.build_dataset(
                 gamma=ac.gamma, gae_lambda=ac.gae_lambda, device=device,
             )
-            play_data = buf.build_play_dataset(
+            play_data = play_buf.build_dataset(
                 gamma=ac.gamma, gae_lambda=ac.gae_lambda, device=device,
             )
 

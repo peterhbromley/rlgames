@@ -1,0 +1,158 @@
+"""
+Deep CFR trainer for 2-player zero-sum OpenSpiel games.
+
+Wraps OpenSpiel's PyTorch DeepCFRSolver with periodic exploitability logging
+and checkpointing. Drives the solver's inner loop manually rather than calling
+solve() so we can log and save at intervals.
+
+Usage:
+    python -m training.general.dcfr_trainer --config training/configs/liars_dice_dcfr.yaml
+"""
+
+import argparse
+import logging
+import os
+import pickle
+from pathlib import Path
+
+from training.general.config import DeepCFRRunConfig
+
+
+def train(cfg: DeepCFRRunConfig) -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    logging.getLogger("absl").setLevel(logging.WARNING)
+
+    from open_spiel.python import policy
+    from open_spiel.python.algorithms import exploitability
+    from open_spiel.python.pytorch.deep_cfr import DeepCFRSolver
+    import pyspiel
+
+    game = cfg.game.make_game()
+    dc = cfg.deep_cfr
+
+    logging.info(
+        "Game: %s | players=%d",
+        cfg.game.name, game.num_players(),
+    )
+
+    checkpoint_path = dc.checkpoint
+    start_iter = 0
+
+    if os.path.exists(checkpoint_path):
+        with open(checkpoint_path, "rb") as f:
+            cp = pickle.load(f)
+        solver = cp["solver"]
+        start_iter = cp["iteration"]
+        logging.info("Loaded checkpoint from %s (iteration %d)", checkpoint_path, start_iter)
+    else:
+        Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
+        solver = DeepCFRSolver(
+            game,
+            policy_network_layers=tuple(dc.policy_network_layers),
+            advantage_network_layers=tuple(dc.advantage_network_layers),
+            num_iterations=dc.num_iterations,
+            num_traversals=dc.num_traversals,
+            learning_rate=dc.lr,
+            batch_size_advantage=dc.batch_size_advantage,
+            batch_size_strategy=dc.batch_size_strategy,
+            memory_capacity=dc.memory_capacity,
+            policy_network_train_steps=dc.policy_network_train_steps,
+            advantage_network_train_steps=dc.advantage_network_train_steps,
+            reinitialize_advantage_networks=dc.reinitialize_advantage_networks,
+            device=dc.device,
+        )
+
+    wb_run = None
+    if cfg.wandb.enabled:
+        import wandb
+        wb_run = wandb.init(
+            project=cfg.wandb.project,
+            group=cfg.wandb.group,
+            name=cfg.wandb.run_name,
+            tags=cfg.wandb.tags,
+            config=cfg.model_dump(),
+        )
+
+    num_players = game.num_players()
+    root_state = game.new_initial_state()
+
+    for it in range(start_iter, dc.num_iterations):
+        # One Deep CFR iteration: traverse for each player, train advantage nets.
+        for p in range(num_players):
+            for _ in range(dc.num_traversals):
+                solver._traverse_game_tree(root_state, p)
+            if dc.reinitialize_advantage_networks:
+                solver._reinitialize_advantage_network(p)
+            solver._learn_advantage_network(p)
+        solver._iteration += 1
+
+        if (it + 1) % dc.log_interval == 0:
+            # Train strategy network and compute exploitability.
+            solver._reinitialize_policy_network()
+            policy_loss = solver._learn_strategy_network()
+
+            avg_policy = policy.tabular_policy_from_callable(
+                game, solver.action_probabilities,
+            )
+            conv = exploitability.nash_conv(game, avg_policy)
+            expl = exploitability.exploitability(game, avg_policy)
+
+            logging.info(
+                "Iter %d / %d | exploitability: %.6f | nash_conv: %.6f | policy_loss: %s",
+                it + 1, dc.num_iterations, expl, conv,
+                f"{policy_loss:.6f}" if policy_loss is not None else "N/A",
+            )
+
+            if wb_run:
+                import wandb
+                metrics = {
+                    "iteration": it + 1,
+                    "exploitability": expl,
+                    "nash_conv": conv,
+                }
+                if policy_loss is not None:
+                    metrics["policy_loss"] = policy_loss
+                wandb.log(metrics)
+
+            cp = {"solver": solver, "iteration": it + 1}
+            with open(checkpoint_path, "wb") as f:
+                pickle.dump(cp, f)
+
+    # Final strategy network training and evaluation.
+    solver._reinitialize_policy_network()
+    policy_loss = solver._learn_strategy_network()
+
+    avg_policy = policy.tabular_policy_from_callable(
+        game, solver.action_probabilities,
+    )
+    expl = exploitability.exploitability(game, avg_policy)
+    logging.info("Final exploitability: %.6f | policy_loss: %s",
+                 expl, f"{policy_loss:.6f}" if policy_loss is not None else "N/A")
+
+    cp = {"solver": solver, "iteration": dc.num_iterations}
+    with open(checkpoint_path, "wb") as f:
+        pickle.dump(cp, f)
+    logging.info("Saved final checkpoint to %s", checkpoint_path)
+
+    if wb_run:
+        wb_run.finish()
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Train Deep CFR for a 2-player zero-sum OpenSpiel game.",
+    )
+    parser.add_argument("--config", required=True, help="Path to YAML config.")
+    args = parser.parse_args()
+    train(DeepCFRRunConfig.from_yaml(args.config))
+
+
+if __name__ == "__main__":
+    main()

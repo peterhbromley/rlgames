@@ -1,6 +1,6 @@
-# GCE GPU Training Setup
+# GCE Training Setup
 
-Step-by-step guide for training on a Google Compute Engine Spot VM with a T4 GPU.
+Step-by-step guide for training on a Google Compute Engine Spot VM.
 
 ---
 
@@ -25,141 +25,138 @@ gcloud services enable compute.googleapis.com
 ## Step 1 — Create the VM
 
 ```bash
-chmod +x gce/create_vm.sh
-./gce/create_vm.sh
+# CPU-only
+./gce/create_vm.sh --zone us-central1-a --machine-type e2-highcpu-16
+
+# GPU (T4)
+./gce/create_vm.sh --zone us-central1-a --machine-type n1-standard-4 --gpu nvidia-tesla-t4
+
+# GPU (L4)
+./gce/create_vm.sh --zone us-central1-a --machine-type g2-standard-4 --gpu nvidia-l4
 ```
 
-**What this does:**
-- Creates a `n1-standard-4` VM (4 vCPUs, 15 GB RAM) with a single T4 GPU in `us-central1-a`.
-- Uses the `pytorch-latest-gpu` Deep Learning VM image, which comes with Ubuntu, CUDA, cuDNN, and PyTorch pre-installed — no manual CUDA setup needed.
-- Sets `--provisioning-model=SPOT` for ~70% cost savings. Spot VMs can be preempted by Google, but `--instance-termination-action=STOP` means the disk is preserved on preemption (rather than deleted), so a resumed run can pick up from its last checkpoint.
-- Sets `--maintenance-policy=TERMINATE` — required for any VM with a GPU, because GPU VMs cannot live-migrate.
+**Required flags:**
+- `--zone` — GCE zone (e.g. `us-central1-a`)
+- `--machine-type` — GCE machine type (e.g. `e2-highcpu-16`, `n1-standard-4`)
 
-**Expected cost:** ~$0.35–0.50/hour while running (T4 Spot in us-central1).
+**Optional flags:**
+- `--name` — VM instance name (default: `rlgames-trainer`)
+- `--gpu` — GPU type to attach (e.g. `nvidia-tesla-t4`, `nvidia-l4`)
+- `--gpu-count` — Number of GPUs (default: 1)
+- `--wandb-key` — WandB API key for experiment tracking
+- `--project` — GCP project (default: current gcloud config)
+
+**GPU + machine-type compatibility:**
+
+| GPU | Machine type family |
+|-----|-------------------|
+| `nvidia-tesla-t4`, `nvidia-tesla-v100`, `nvidia-tesla-p100` | `n1-*` |
+| `nvidia-l4` | `g2-*` |
+| `nvidia-tesla-a100`, `nvidia-a100-80gb` | `a2-*` |
+
+**What this does:**
+- Creates a Spot VM with the specified machine type and zone.
+- Uses Ubuntu 22.04 LTS.
+- Sets `--provisioning-model=SPOT` for ~70% cost savings. Spot VMs can be preempted, but `--instance-termination-action=STOP` preserves the disk on preemption so you can resume from the last checkpoint.
+- Runs `startup.sh` to install dependencies and clone the repo. **Does not start training** — you SSH in and start it manually.
+- With `--gpu`: attaches the GPU, installs NVIDIA drivers, and installs PyTorch with CUDA support. Boot disk is increased to 100GB.
 
 ---
 
 ## Step 2 — Wait for startup to complete
 
 The VM runs `gce/startup.sh` automatically on first boot. It clones the repo,
-installs uv, installs all Python dependencies, and verifies the GPU is visible.
-This takes **3–5 minutes** on first boot.
+installs uv, and installs all Python dependencies. This takes **3–5 minutes** (or **~10 minutes** with GPU driver install).
 
-To watch progress after SSHing in:
+To watch progress:
+
+```bash
+gcloud compute ssh rlgames-trainer --zone=us-central1-a -- 'tail -f /tmp/rlgames-startup.log'
+```
+
+When you see `=== rlgames startup complete ===` the VM is ready.
+
+---
+
+## Step 3 — Start training
+
+SSH in and run whichever trainer you need:
 
 ```bash
 gcloud compute ssh rlgames-trainer --zone=us-central1-a
-tail -f /var/log/rlgames-startup.log
-```
-
-You'll see the startup script's output stream in real time. When you see
-`=== rlgames startup complete ===` the VM is ready.
-
----
-
-## Step 3 — Configure WandB
-
-WandB tracks your training metrics (loss, reward) and saves them to the cloud so you can monitor progress from your local browser even after the SSH session closes.
-
-```bash
-uv run wandb login
-# Paste your API key from https://wandb.ai/authorize
-```
-
-Your API key is stored in `~/.netrc` and persists across sessions on this VM.
-
----
-
-## Step 4 — Run training
-
-```bash
 cd /opt/rlgames/python
-
-# Full Oh Hell game, GPU, with WandB logging
-uv run python -m training.train --config training/configs/oh_hell_full.yaml
 ```
 
-Training logs to stdout and saves a checkpoint to `training/checkpoints/oh_hell_full.pt` every `log_interval` episodes (default: 10,000). If the VM is preempted and you restart, re-run the same command — it will automatically resume from the latest checkpoint.
+### Training commands
+
+| Game | Algorithm | Command |
+|------|-----------|---------|
+| Oh Hell (4p, 3 tricks) | PPO self-play | `uv run python -m training.general.ppo_trainer --config training/configs/oh_hell_ppo.yaml` |
+| Liars Dice (2p, 1 die) | Tabular MCCFR | `uv run python -m training.general.mccfr_trainer --config training/configs/liars_dice_mccfr.yaml` |
+| Liars Dice (2p, 2 dice) | Deep CFR | `uv run python -m training.general.dcfr_trainer --config training/configs/liars_dice_dcfr.yaml` |
 
 To run in the background so training survives SSH disconnects:
 
 ```bash
-nohup uv run python -m training.train --config training/configs/oh_hell_full.yaml \
-  > logs/training.log 2>&1 &
-
-echo $!  # prints the PID — save this if you want to stop the run later
+screen -S training
+uv run python -m training.general.ppo_trainer --config training/configs/oh_hell_ppo.yaml
+# Ctrl-A D to detach; screen -r training to reattach
 ```
 
-Monitor progress after reconnecting:
+### WandB tracking
 
-```bash
-tail -f logs/training.log
-```
+Each config has a `wandb` section. To enable, either edit the YAML (`enabled: true`) or pass `--wandb-key` when creating the VM.
 
-Check if it's still running:
+Runs are organized by **group** within a single `rlgames` project:
+- `oh-hell` — PPO self-play runs
+- `liars-dice` — MCCFR and Deep CFR runs
 
-```bash
-ps aux | grep training.train
-```
-
-Stop it early:
-
-```bash
-kill <PID>
-```
+In the WandB dashboard, use the **Group** dropdown to filter by game. Tags (`ppo`, `mccfr`, `deep-cfr`, `1-die`, `2-dice`, etc.) provide further filtering within a group.
 
 ---
 
-## Step 5 — Copy the checkpoint back
+## Step 4 — Copy the checkpoint back
 
 When training is done, download the checkpoint to your local machine:
 
 ```bash
-# On your local machine
-gcloud compute scp rlgames-trainer:/opt/rlgames/python/training/checkpoints/oh_hell_full.pt \
-  ./python/training/checkpoints/ --zone=us-central1-a
+gcloud compute scp rlgames-trainer:/opt/rlgames/python/checkpoints/oh_hell_ppo.pt \
+  ./python/checkpoints/ --zone=us-central1-a
 ```
 
 ---
 
-## Step 6 — Stop the VM
+## Step 5 — Stop the VM
 
-**Always stop the VM when you are done.** You are charged for the GPU while it is running.
+**Always stop the VM when you are done.** You are charged while it is running.
 
 ```bash
 gcloud compute instances stop rlgames-trainer --zone=us-central1-a
 ```
 
-The disk and its contents (checkpoints, logs) are preserved when stopped. You can restart later with:
+The disk is preserved when stopped. Restart later with:
 
 ```bash
 gcloud compute instances start rlgames-trainer --zone=us-central1-a
 ```
 
-To delete the VM entirely (frees all resources):
+To delete the VM entirely:
 
 ```bash
-gcloud compute instances delete rlgames-trainer --zone=us-central1-a
+gcloud compute instances delete rlgames-trainer --zone=us-central1-a --quiet
 ```
 
 ---
 
 ## Troubleshooting
 
-**`nvidia-smi` not found after SSH:**
-The driver installation runs at first boot and can take a few minutes. Wait ~2 minutes and try again, or check `journalctl -u google-install-nvidia-driver`.
-
 **VM preempted mid-training:**
-Restart the VM (`gcloud compute instances start rlgames-trainer --zone=us-central1-a`), SSH back in, and re-run the training command. It will resume from the last checkpoint automatically.
+Restart the VM, SSH back in, and re-run the training command. It will resume from the last checkpoint automatically.
 
 **Permission denied running uv or writing files:**
-The startup script runs as root, so `/opt/rlgames` may be owned by root. Fix with:
 ```bash
 sudo chown -R $USER:$USER /opt/rlgames
 ```
 
 **Spot VM unavailable in zone:**
-Try another zone — T4 availability shifts constantly. See the zone-probing loop in the troubleshooting section above, or try `us-central1-b`, `us-east1-c`, `us-east1-d`, or `us-west1-b`.
-
-**Out of GPU memory:**
-Reduce `batch_size` in your config YAML (e.g. `128` instead of `256`).
+Try another zone — availability shifts. Try `us-central1-b`, `us-east1-c`, `us-west1-b`, etc.

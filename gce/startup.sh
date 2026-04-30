@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # startup.sh — runs automatically on first VM boot.
-# Sets up the environment and starts training as the SSH user.
+# Installs dependencies and clones the repo. Does NOT start training.
 #
-# Monitor progress after SSHing in:
-#   tail -f /tmp/rlgames-training.log
-#   screen -r training
+# After SSHing in, start training manually:
+#   cd /opt/rlgames/python
+#   uv run python -m training.general.ppo_trainer --config training/configs/oh_hell_ppo.yaml
 
 set -euo pipefail
 exec > >(tee -a /tmp/rlgames-startup.log) 2>&1
@@ -17,9 +17,8 @@ _meta() {
     -H "Metadata-Flavor: Google" 2>/dev/null || true
 }
 
-TRAINING_CONFIG="$(_meta instance/attributes/training-config)"
-TRAINING_CONFIG="${TRAINING_CONFIG:-training/configs/oh_hell_ppo_variable.yaml}"
 WANDB_API_KEY="$(_meta instance/attributes/wandb-api-key)"
+HAS_GPU="$(_meta instance/attributes/gpu)"
 
 # The GCE SSH user is the Google account email prefix, available from metadata.
 SSH_USER="$(_meta instance/attributes/ssh-keys | head -1 | cut -d: -f1 || true)"
@@ -32,19 +31,20 @@ if [ -z "$SSH_USER" ]; then
   SSH_USER="root"
 fi
 
-if [ "$SSH_USER" = "root" ]; then
-  USER_HOME="/root"
-else
-  USER_HOME="/home/$SSH_USER"
-fi
-
-echo "SSH user        : $SSH_USER"
-echo "Training config : $TRAINING_CONFIG"
+echo "SSH user : $SSH_USER"
 
 # ── System packages ───────────────────────────────────────────────────────────
 echo "Installing system packages..."
 apt-get update -qq
 apt-get install -y -qq screen git curl build-essential
+
+# ── NVIDIA drivers (GPU only) ─────────────────────────────────────────────────
+if [ "$HAS_GPU" = "true" ]; then
+  echo "Installing NVIDIA drivers..."
+  apt-get install -y -qq ubuntu-drivers-common
+  ubuntu-drivers install
+  echo "NVIDIA driver installed."
+fi
 
 # ── Install uv ────────────────────────────────────────────────────────────────
 echo "Installing uv..."
@@ -60,6 +60,11 @@ chown -R "$SSH_USER:$SSH_USER" "$REPO_DIR"
 echo "Installing Python dependencies..."
 cd "$REPO_DIR/python"
 sudo -u "$SSH_USER" uv sync
+
+if [ "$HAS_GPU" = "true" ]; then
+  echo "Installing PyTorch with CUDA support..."
+  sudo -u "$SSH_USER" uv pip install torch --reinstall --index-url https://download.pytorch.org/whl/cu124
+fi
 echo "Dependencies installed."
 
 # ── Configure WandB ───────────────────────────────────────────────────────────
@@ -71,33 +76,9 @@ if [ -n "$WANDB_API_KEY" ]; then
     echo "WandB login failed — run 'wandb login' manually after SSHing in."
 fi
 
-# ── Write convenience start script ───────────────────────────────────────────
-TRAIN_CMD="cd $REPO_DIR/python && uv run python -m training.train_ppo --config $TRAINING_CONFIG"
-TRAIN_LOG="/tmp/rlgames-training.log"
-
-cat > "$USER_HOME/start_training.sh" << EOF
-#!/usr/bin/env bash
-set -euo pipefail
-if screen -list 2>/dev/null | grep -q "training"; then
-  echo "Training already running. Attach with: screen -r training"
-else
-  echo "Starting training..."
-  screen -dmS training bash -c '${TRAIN_CMD} 2>&1 | tee -a ${TRAIN_LOG}; exec bash'
-  echo "Training started. Attach with: screen -r training"
-  echo "Logs: tail -f ${TRAIN_LOG}"
-fi
-EOF
-chmod +x "$USER_HOME/start_training.sh"
-chown "$SSH_USER:$SSH_USER" "$USER_HOME/start_training.sh"
-
-# ── Start training ────────────────────────────────────────────────────────────
-echo "Starting training as $SSH_USER..."
-sudo -u "$SSH_USER" screen -dmS training \
-  bash -c "${TRAIN_CMD} 2>&1 | tee -a ${TRAIN_LOG}; exec bash"
-
 echo ""
 echo "=== rlgames startup complete: $(date) ==="
 echo ""
-echo "SSH in and check training:"
-echo "  tail -f /tmp/rlgames-training.log"
-echo "  screen -r training"
+echo "SSH in and start training:"
+echo "  cd /opt/rlgames/python"
+echo "  uv run python -m training.general.ppo_trainer --config training/configs/oh_hell_ppo.yaml"

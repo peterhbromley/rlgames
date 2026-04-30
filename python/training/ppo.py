@@ -1,12 +1,6 @@
 """
-PPO components for Oh Hell training with separate bid and play networks.
-
-Architecture:
-  - BidNet:  info_state during bidding → bid action (0..num_tricks)
-  - PlayNet: info_state during play   → card action (0..deck_size-1)
-
-Both are ActorCritic models with illegal-action masking.
-A PolicyPool stores past snapshots for diverse self-play opponents.
+PPO components: actor-critic network, rollout buffer, PPO update,
+and policy pool for self-play training.
 """
 
 import copy
@@ -79,46 +73,36 @@ class ActorCritic(nn.Module):
 # ---------------------------------------------------------------------------
 
 class RolloutBuffer:
-    """Collects separate bid and play trajectories, computes GAE advantages."""
+    """Collects transitions for a single network, computes GAE advantages.
+
+    Terminal reward is assigned to the last step; all earlier steps get 0.
+    """
 
     def __init__(self):
-        self._bid_eps: list[list[dict]] = []
-        self._play_eps: list[list[dict]] = []
-        self._cur_bid: list[dict] = []
-        self._cur_play: list[dict] = []
+        self._episodes: list[list[dict]] = []
+        self._current: list[dict] = []
 
     @property
     def num_episodes(self) -> int:
-        return len(self._bid_eps)
+        return len(self._episodes)
 
-    def add_bid(self, obs, action, log_prob, value, legal_mask):
-        self._cur_bid.append(dict(
-            obs=obs, action=action, log_prob=log_prob,
-            value=value, legal_mask=legal_mask,
-        ))
-
-    def add_play(self, obs, action, log_prob, value, legal_mask):
-        self._cur_play.append(dict(
+    def add(self, obs, action, log_prob, value, legal_mask):
+        self._current.append(dict(
             obs=obs, action=action, log_prob=log_prob,
             value=value, legal_mask=legal_mask,
         ))
 
     def finish_episode(self, reward: float):
-        """Assign terminal reward and flush the current episode's transitions."""
-        # Bid: single-step trajectory — reward is the full hand outcome.
-        for t in self._cur_bid:
-            t["reward"] = reward
-        # Play: multi-step trajectory — reward only at the final step.
-        for t in self._cur_play:
+        """Assign terminal reward to last step and flush."""
+        for t in self._current:
             t["reward"] = 0.0
-        if self._cur_play:
-            self._cur_play[-1]["reward"] = reward
-        if self._cur_bid:
-            self._bid_eps.append(self._cur_bid)
-        if self._cur_play:
-            self._play_eps.append(self._cur_play)
-        self._cur_bid = []
-        self._cur_play = []
+        if self._current:
+            self._current[-1]["reward"] = reward
+            self._episodes.append(self._current)
+        self._current = []
+
+    def build_dataset(self, gamma=1.0, gae_lambda=0.95, device="cpu"):
+        return self._build_dataset(self._episodes, gamma, gae_lambda, device)
 
     @staticmethod
     def _build_dataset(episodes, gamma, gae_lambda, device):
@@ -155,12 +139,6 @@ class RolloutBuffer:
             returns=torch.tensor(all_ret, dtype=torch.float32, device=device),
             advantages=(adv - adv.mean()) / (adv.std() + 1e-8),
         )
-
-    def build_bid_dataset(self, gamma=1.0, gae_lambda=0.95, device="cpu"):
-        return self._build_dataset(self._bid_eps, gamma, gae_lambda, device)
-
-    def build_play_dataset(self, gamma=1.0, gae_lambda=0.95, device="cpu"):
-        return self._build_dataset(self._play_eps, gamma, gae_lambda, device)
 
 
 # ---------------------------------------------------------------------------
@@ -223,24 +201,21 @@ def ppo_update(
 # ---------------------------------------------------------------------------
 
 class PolicyPool:
-    """Fixed-size FIFO pool of past bid/play network snapshots."""
+    """Fixed-size FIFO pool of past network snapshots for self-play."""
 
     def __init__(self, max_size: int = 20):
         self.max_size = max_size
-        self._entries: list[dict[str, dict]] = []
+        self._entries: list[dict] = []
 
     def __len__(self):
         return len(self._entries)
 
-    def add(self, bid_net: ActorCritic, play_net: ActorCritic):
-        self._entries.append({
-            "bid": copy.deepcopy(bid_net.state_dict()),
-            "play": copy.deepcopy(play_net.state_dict()),
-        })
+    def add(self, net: ActorCritic):
+        self._entries.append(copy.deepcopy(net.state_dict()))
         if len(self._entries) > self.max_size:
             self._entries.pop(0)
 
-    def sample(self) -> dict[str, dict]:
+    def sample(self) -> dict:
         return stdlib_random.choice(self._entries)
 
     def state_dict(self) -> list[dict]:

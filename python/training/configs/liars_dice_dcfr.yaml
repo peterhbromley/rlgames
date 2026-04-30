@@ -1,0 +1,30 @@
+# Liars Dice — Deep CFR.
+# 2-player, 2 dice, 6 sides. Too large for tabular MCCFR to be practical.
+
+game:
+  name: liars_dice
+  params:
+    players: 2
+    numdice: 2
+    dice_sides: 6
+
+deep_cfr:
+  num_iterations: 100
+  num_traversals: 100
+  lr: 1.0e-3
+  advantage_network_layers: [128, 128]
+  policy_network_layers: [256, 256]
+  batch_size_advantage: 2048
+  batch_size_strategy: 2048
+  memory_capacity: 1000000
+  advantage_network_train_steps: 750
+  policy_network_train_steps: 5000
+  reinitialize_advantage_networks: true
+  device: cpu
+  log_interval: 10
+  checkpoint: checkpoints/liars_dice_dcfr.pkl
+
+wandb:
+  enabled: false
+  group: liars-dice
+  tags: [deep-cfr, 2-dice]

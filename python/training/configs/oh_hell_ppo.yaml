@@ -1,0 +1,37 @@
+# Oh Hell — PPO self-play.
+# Uses a single policy-value network (no bid/play split).
+
+game:
+  name: oh_hell
+  params:
+    players: 4
+    num_cards_per_suit: 13
+    num_suits: 4
+    num_tricks_fixed: 3
+    off_bid_penalty: false
+    points_per_trick: 1
+
+agent:
+  hidden_layers_sizes: [512, 512]
+  lr: 3.0e-4
+  gamma: 1.0
+  gae_lambda: 0.95
+  clip_epsilon: 0.2
+  entropy_coef: 0.03
+  value_coef: 0.5
+  ppo_epochs: 4
+  batch_size: 256
+  episodes_per_iter: 2048
+  pool_size: 20
+  pool_save_interval: 10
+  eval_episodes: 500 
+
+training:
+  num_iterations: 5000
+  device: cpu
+  checkpoint: checkpoints/oh_hell_ppo.pt
+  log_interval: 10
+  wandb:
+    enabled: false 
+    group: oh-hell
+    tags: [ppo]
