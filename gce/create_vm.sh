@@ -46,7 +46,7 @@ PROJECT="${PROJECT:-$(gcloud config get-value project)}"
 # GPU VMs use Deep Learning VM image (CUDA + drivers pre-installed, no setup needed).
 # CPU VMs use standard Ubuntu 22.04.
 if [[ -n "$GPU_TYPE" ]]; then
-  IMAGE_FAMILY="common-cu124-debian-11"
+  IMAGE_FAMILY="common-cu129-ubuntu-2204-nvidia-580"
   IMAGE_PROJECT="deeplearning-platform-release"
   DISK_SIZE="100GB"
 else

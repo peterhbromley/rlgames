@@ -43,7 +43,7 @@ sudo -u "$SSH_USER" uv sync
 
 if [[ "$HAS_GPU" == "true" ]]; then
   sudo -u "$SSH_USER" uv pip install torch --reinstall \
-    --index-url https://download.pytorch.org/whl/cu124
+    --index-url https://download.pytorch.org/whl/cu126
 fi
 
 # ── WandB ─────────────────────────────────────────────────────────────────────
