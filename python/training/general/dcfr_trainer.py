@@ -1,15 +1,23 @@
 """
 Deep CFR trainer for 2-player zero-sum OpenSpiel games.
 
-Wraps OpenSpiel's PyTorch DeepCFRSolver with periodic exploitability logging
-and checkpointing. Drives the solver's inner loop manually rather than calling
-solve() so we can log and save at intervals.
+Wraps OpenSpiel's PyTorch DeepCFRSolver. Drives the solver's inner loop
+manually rather than calling solve() so we can log and checkpoint at intervals.
+
+We do NOT compute full exploitability during training — for non-trivial games
+it requires materializing a tabular policy over every info state and traversing
+the entire game tree, which is memory-prohibitive in OpenSpiel's Python
+implementation. Instead we log advantage-network loss and memory sizes as
+training health signals. The strategy (average policy) network is trained
+once at the end so the saved checkpoint produces a usable policy. Evaluate
+quality via head-to-head play against a reference solver (e.g. tabular MCCFR).
 
 Usage:
     python -m training.general.dcfr_trainer --config training/configs/liars_dice_dcfr.yaml
 """
 
 import argparse
+import gc
 import logging
 import os
 import pickle
@@ -26,10 +34,7 @@ def train(cfg: DeepCFRRunConfig) -> None:
     )
     logging.getLogger("absl").setLevel(logging.WARNING)
 
-    from open_spiel.python import policy
-    from open_spiel.python.algorithms import exploitability
     from open_spiel.python.pytorch.deep_cfr import DeepCFRSolver
-    import pyspiel
 
     game = cfg.game.make_game()
     dc = cfg.deep_cfr
@@ -84,7 +89,6 @@ def train(cfg: DeepCFRRunConfig) -> None:
         iter_start = time.time()
         adv_losses = []
 
-        # One Deep CFR iteration: traverse for each player, train advantage nets.
         for p in range(num_players):
             for _ in range(dc.num_traversals):
                 solver._traverse_game_tree(root_state, p)
@@ -96,26 +100,13 @@ def train(cfg: DeepCFRRunConfig) -> None:
         iter_time = time.time() - iter_start
 
         if (it + 1) % dc.log_interval == 0:
-            import gc
-
-            # Train strategy network and compute exploitability.
-            solver._reinitialize_policy_network()
-            policy_loss = solver._learn_strategy_network()
-
-            avg_policy = policy.tabular_policy_from_callable(
-                game, solver.action_probabilities,
-            )
-            expl = exploitability.exploitability(game, avg_policy)
-
             adv_mem_size = sum(len(m) for m in solver._advantage_memories)
             strat_mem_size = len(solver._strategy_memories)
             mean_adv_loss = sum(adv_losses) / len(adv_losses) if adv_losses else 0.0
 
             logging.info(
-                "Iter %d / %d | expl: %.6f | adv_loss: %.4f | policy_loss: %s | "
-                "adv_mem: %d | strat_mem: %d | iter_time: %.2fs",
-                it + 1, dc.num_iterations, expl, mean_adv_loss,
-                f"{policy_loss:.6f}" if policy_loss is not None else "N/A",
+                "Iter %d / %d | adv_loss: %.4f | adv_mem: %d | strat_mem: %d | iter_time: %.2fs",
+                it + 1, dc.num_iterations, mean_adv_loss,
                 adv_mem_size, strat_mem_size, iter_time,
             )
 
@@ -123,7 +114,6 @@ def train(cfg: DeepCFRRunConfig) -> None:
                 import wandb
                 metrics = {
                     "iteration": it + 1,
-                    "exploitability": expl,
                     "advantage_loss": mean_adv_loss,
                     "advantage_memory_size": adv_mem_size,
                     "strategy_memory_size": strat_mem_size,
@@ -131,27 +121,27 @@ def train(cfg: DeepCFRRunConfig) -> None:
                 }
                 for p, loss in enumerate(adv_losses):
                     metrics[f"advantage_loss_p{p}"] = loss
-                if policy_loss is not None:
-                    metrics["policy_loss"] = policy_loss
                 wandb.log(metrics)
 
             cp = {"solver": solver, "iteration": it + 1}
             with open(checkpoint_path, "wb") as f:
                 pickle.dump(cp, f)
 
-            del avg_policy
             gc.collect()
 
-    # Final strategy network training and evaluation.
+    # Train the strategy (average policy) network once at the end so the
+    # saved checkpoint produces a usable policy for inference / evaluation.
+    logging.info("Training final strategy network...")
     solver._reinitialize_policy_network()
     policy_loss = solver._learn_strategy_network()
-
-    avg_policy = policy.tabular_policy_from_callable(
-        game, solver.action_probabilities,
+    logging.info(
+        "Final policy_loss: %s",
+        f"{policy_loss:.6f}" if policy_loss is not None else "N/A",
     )
-    expl = exploitability.exploitability(game, avg_policy)
-    logging.info("Final exploitability: %.6f | policy_loss: %s",
-                 expl, f"{policy_loss:.6f}" if policy_loss is not None else "N/A")
+
+    if wb_run and policy_loss is not None:
+        import wandb
+        wandb.log({"policy_loss": policy_loss})
 
     cp = {"solver": solver, "iteration": dc.num_iterations}
     with open(checkpoint_path, "wb") as f:
