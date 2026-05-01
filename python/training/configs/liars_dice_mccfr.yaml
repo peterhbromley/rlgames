@@ -15,5 +15,6 @@ mccfr:
 
 wandb:
   enabled: false
+  run_name: liars-dice-1d-mccfr
   group: liars-dice
   tags: [mccfr, 1-die]

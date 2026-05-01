@@ -4,6 +4,9 @@ PPO self-play trainer for OpenSpiel games.
 Works with any sequential imperfect-information game. Uses a single
 policy-value network (no game-specific head splitting).
 
+Rollout collection is parallelized across CPU cores via ProcessPoolExecutor
+when num_workers > 1.
+
 Usage:
     python -m training.general.ppo_trainer --config training/configs/oh_hell_ppo.yaml
 """
@@ -11,6 +14,7 @@ Usage:
 import argparse
 import logging
 import os
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -21,7 +25,7 @@ from training.general.config import RunConfig
 
 
 # ---------------------------------------------------------------------------
-# Episode collection
+# Episode collection (sequential, used when num_workers == 1)
 # ---------------------------------------------------------------------------
 
 def _act_network(net, obs_np, legal, num_actions, device, greedy=False):
@@ -132,6 +136,216 @@ def eval_episodes(
 
 
 # ---------------------------------------------------------------------------
+# Parallel workers (module-level so ProcessPoolExecutor can pickle them)
+# ---------------------------------------------------------------------------
+
+def _rollout_worker(args: tuple) -> tuple:
+    """Collect training episodes in a subprocess."""
+    (
+        net_sd, pool_entries,
+        num_episodes, seed,
+        game_name, game_params,
+        num_actions, num_players,
+        hidden_sizes,
+    ) = args
+
+    import random as _random
+    import numpy as _np
+    import torch as _torch
+    from training.ppo import ActorCritic as _AC, RolloutBuffer as _RB
+
+    _torch.set_num_threads(1)
+    _random.seed(seed)
+    _np.random.seed(seed)
+    _torch.manual_seed(seed)
+
+    from open_spiel.python import rl_environment
+    env = rl_environment.Environment(game_name, **game_params)
+
+    state_size = env.observation_spec()["info_state"][0]
+    net = _AC(state_size, num_actions, hidden_sizes)
+    net.load_state_dict(net_sd)
+    net.eval()
+
+    opp_net = _AC(state_size, num_actions, hidden_sizes)
+    opp_net.load_state_dict(net_sd)
+    opp_net.eval()
+
+    buf = _RB()
+    rewards = _np.zeros(num_episodes)
+
+    for ep in range(num_episodes):
+        learner = ep % num_players
+
+        if pool_entries:
+            opp_net.load_state_dict(_random.choice(pool_entries))
+
+        time_step = env.reset()
+        while not time_step.last():
+            player = time_step.observations["current_player"]
+            legal = time_step.observations["legal_actions"][player]
+
+            obs_np = _np.asarray(
+                time_step.observations["info_state"][player], dtype=_np.float32,
+            )
+            mask = _np.zeros(num_actions, dtype=_np.bool_)
+            mask[legal] = True
+            obs_t = _torch.as_tensor(obs_np)
+            mask_t = _torch.as_tensor(mask)
+
+            if player == learner:
+                action, lp, val = net.act(obs_t, mask_t)
+                buf.add(obs_np, action, lp, val, mask)
+            else:
+                action, _, _ = opp_net.act(obs_t, mask_t)
+
+            time_step = env.step([action])
+
+        reward = time_step.rewards[learner]
+        buf.finish_episode(reward)
+        rewards[ep] = reward
+
+    return buf._episodes, rewards
+
+
+def _eval_worker(args: tuple) -> np.ndarray:
+    """Greedy eval episodes in a subprocess."""
+    (
+        net_sd, pool_entries,
+        num_episodes, seed,
+        game_name, game_params,
+        num_actions, num_players,
+        hidden_sizes,
+    ) = args
+
+    import random as _random
+    import numpy as _np
+    import torch as _torch
+    from training.ppo import ActorCritic as _AC
+
+    _torch.set_num_threads(1)
+    _random.seed(seed)
+    _np.random.seed(seed)
+    _torch.manual_seed(seed)
+
+    from open_spiel.python import rl_environment
+    env = rl_environment.Environment(game_name, **game_params)
+
+    state_size = env.observation_spec()["info_state"][0]
+    net = _AC(state_size, num_actions, hidden_sizes)
+    net.load_state_dict(net_sd)
+    net.eval()
+
+    opp_net = _AC(state_size, num_actions, hidden_sizes)
+    opp_net.load_state_dict(net_sd)
+    opp_net.eval()
+
+    rewards = _np.zeros(num_episodes)
+
+    for ep in range(num_episodes):
+        learner = ep % num_players
+
+        if pool_entries:
+            opp_net.load_state_dict(_random.choice(pool_entries))
+
+        time_step = env.reset()
+        while not time_step.last():
+            player = time_step.observations["current_player"]
+            legal = time_step.observations["legal_actions"][player]
+
+            obs_np = _np.asarray(
+                time_step.observations["info_state"][player], dtype=_np.float32,
+            )
+            mask = _np.zeros(num_actions, dtype=_np.bool_)
+            mask[legal] = True
+            obs_t = _torch.as_tensor(obs_np)
+            mask_t = _torch.as_tensor(mask)
+
+            if player == learner:
+                action, _, _ = net.act(obs_t, mask_t, greedy=True)
+            else:
+                action, _, _ = opp_net.act(obs_t, mask_t)
+
+            time_step = env.step([action])
+
+        rewards[ep] = time_step.rewards[learner]
+
+    return rewards
+
+
+def _make_worker_args(net, pool, num_episodes, num_workers, iteration, game_cfg, num_actions, num_players, hidden_sizes):
+    """Build the args list for parallel workers."""
+    net_sd = {k: v.cpu() for k, v in net.state_dict().items()}
+    pool_entries = pool.state_dict()
+
+    base, rem = divmod(num_episodes, num_workers)
+    counts = [base + (1 if i < rem else 0) for i in range(num_workers)]
+
+    return [
+        (
+            net_sd, pool_entries,
+            counts[i],
+            iteration * num_workers + i,
+            game_cfg.name, game_cfg.params,
+            num_actions, num_players,
+            hidden_sizes,
+        )
+        for i in range(num_workers)
+    ]
+
+
+def collect_episodes_parallel(
+    executor: ProcessPoolExecutor,
+    net: ActorCritic,
+    pool: PolicyPool,
+    *,
+    num_episodes: int,
+    num_workers: int,
+    num_players: int,
+    num_actions: int,
+    iteration: int,
+    game_cfg,
+    hidden_sizes: list[int],
+) -> tuple[RolloutBuffer, np.ndarray]:
+    """Parallel rollout collection across num_workers subprocesses."""
+    args_list = _make_worker_args(
+        net, pool, num_episodes, num_workers, iteration,
+        game_cfg, num_actions, num_players, hidden_sizes,
+    )
+    results = list(executor.map(_rollout_worker, args_list))
+
+    buffer = RolloutBuffer()
+    all_rewards = []
+    for episodes, rewards in results:
+        buffer._episodes.extend(episodes)
+        all_rewards.append(rewards)
+
+    return buffer, np.concatenate(all_rewards)
+
+
+def eval_episodes_parallel(
+    executor: ProcessPoolExecutor,
+    net: ActorCritic,
+    pool: PolicyPool,
+    *,
+    num_episodes: int,
+    num_workers: int,
+    num_players: int,
+    num_actions: int,
+    iteration: int,
+    game_cfg,
+    hidden_sizes: list[int],
+) -> float:
+    """Parallel greedy eval across num_workers subprocesses."""
+    args_list = _make_worker_args(
+        net, pool, num_episodes, num_workers, iteration,
+        game_cfg, num_actions, num_players, hidden_sizes,
+    )
+    results = list(executor.map(_eval_worker, args_list))
+    return float(np.concatenate(results).mean())
+
+
+# ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
 
@@ -178,10 +392,11 @@ def train(cfg: RunConfig) -> None:
     num_players: int = game.num_players()
     device = cfg.training.device
     ac = cfg.agent
+    num_workers = ac.num_workers
 
     logging.info(
-        "Game: %s | players=%d state_size=%d num_actions=%d",
-        cfg.game.name, num_players, state_size, num_actions,
+        "Game: %s | players=%d state_size=%d num_actions=%d workers=%d",
+        cfg.game.name, num_players, state_size, num_actions, num_workers,
     )
 
     net = ActorCritic(state_size, num_actions, ac.hidden_layers_sizes).to(device)
@@ -212,15 +427,33 @@ def train(cfg: RunConfig) -> None:
             config=cfg.model_dump(),
         )
 
+    executor = ProcessPoolExecutor(max_workers=num_workers) if num_workers > 1 else None
+    parallel_kw = dict(
+        game_cfg=cfg.game,
+        hidden_sizes=ac.hidden_layers_sizes,
+    )
+
     for it in range(start_iter, cfg.training.num_iterations):
         net.eval()
-        buf, rewards = collect_episodes(
-            env, net, opp_net, pool,
-            num_episodes=ac.episodes_per_iter,
-            num_players=num_players,
-            num_actions=num_actions,
-            device=device,
-        )
+
+        if executor is not None:
+            buf, rewards = collect_episodes_parallel(
+                executor, net, pool,
+                num_episodes=ac.episodes_per_iter,
+                num_workers=num_workers,
+                num_players=num_players,
+                num_actions=num_actions,
+                iteration=it,
+                **parallel_kw,
+            )
+        else:
+            buf, rewards = collect_episodes(
+                env, net, opp_net, pool,
+                num_episodes=ac.episodes_per_iter,
+                num_players=num_players,
+                num_actions=num_actions,
+                device=device,
+            )
 
         net.train()
         dataset = buf.build_dataset(
@@ -245,13 +478,25 @@ def train(cfg: RunConfig) -> None:
 
         if (it + 1) % cfg.training.log_interval == 0:
             net.eval()
-            eval_reward = eval_episodes(
-                env, net, opp_net, pool,
-                num_episodes=ac.eval_episodes,
-                num_players=num_players,
-                num_actions=num_actions,
-                device=device,
-            )
+
+            if executor is not None:
+                eval_reward = eval_episodes_parallel(
+                    executor, net, pool,
+                    num_episodes=ac.eval_episodes,
+                    num_workers=num_workers,
+                    num_players=num_players,
+                    num_actions=num_actions,
+                    iteration=it,
+                    **parallel_kw,
+                )
+            else:
+                eval_reward = eval_episodes(
+                    env, net, opp_net, pool,
+                    num_episodes=ac.eval_episodes,
+                    num_players=num_players,
+                    num_actions=num_actions,
+                    device=device,
+                )
 
             logging.info(
                 "Iter %d | train: reward %.3f +/-%.3f | eval: %.3f | "
@@ -275,6 +520,9 @@ def train(cfg: RunConfig) -> None:
                 })
 
             save_checkpoint(net, optimizer, pool, checkpoint_path, it + 1)
+
+    if executor is not None:
+        executor.shutdown()
 
     save_checkpoint(net, optimizer, pool, checkpoint_path, cfg.training.num_iterations)
     logging.info("Training complete.")

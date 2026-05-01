@@ -18,10 +18,6 @@ _meta() {
 WANDB_API_KEY="$(_meta instance/attributes/wandb-api-key)"
 HAS_GPU="$(_meta instance/attributes/gpu)"
 
-# First non-system user (UID >= 1000), fallback to root.
-SSH_USER=$(getent passwd | awk -F: '$3 >= 1000 {print $1; exit}')
-SSH_USER="${SSH_USER:-root}"
-
 REPO_DIR="/opt/rlgames"
 
 # ── System packages ───────────────────────────────────────────────────────────
@@ -35,23 +31,27 @@ curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   git clone https://github.com/peterhbromley/rlgames.git "$REPO_DIR"
 fi
-chown -R "$SSH_USER:$SSH_USER" "$REPO_DIR"
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 cd "$REPO_DIR/python"
-sudo -u "$SSH_USER" uv sync
+uv sync
 
 if [[ "$HAS_GPU" == "true" ]]; then
-  sudo -u "$SSH_USER" uv pip install torch --reinstall \
+  uv pip install torch --reinstall \
     --index-url https://download.pytorch.org/whl/cu126
 fi
 
 # ── WandB ─────────────────────────────────────────────────────────────────────
+# Write key to /etc/environment so it's available to all users on login.
 if [[ -n "$WANDB_API_KEY" ]]; then
-  sudo -u "$SSH_USER" "$REPO_DIR/python/.venv/bin/python" \
-    -c "import wandb; wandb.login(key='${WANDB_API_KEY}')" \
-    || echo "WandB login failed — run 'wandb login' manually."
+  echo "WANDB_API_KEY=${WANDB_API_KEY}" >> /etc/environment
 fi
+
+# Make everything accessible to the SSH user (created lazily by GCE on first login).
+chmod -R a+rwX "$REPO_DIR"
+# uv caches its Python install in the home dir — ensure it's traversable.
+chmod a+rx /root
+chmod -R a+rX /root/.cache/uv 2>/dev/null || true
 
 echo ""
 echo "=== rlgames startup complete: $(date) ==="

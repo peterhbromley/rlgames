@@ -32,6 +32,7 @@ training:
   checkpoint: checkpoints/oh_hell_ppo.pt
   log_interval: 10
   wandb:
-    enabled: false 
+    enabled: false
+    run_name: oh-hell-4p-3t-ppo
     group: oh-hell
     tags: [ppo]

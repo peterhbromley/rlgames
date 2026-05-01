@@ -26,5 +26,6 @@ deep_cfr:
 
 wandb:
   enabled: false
+  run_name: liars-dice-2d-dcfr
   group: liars-dice
   tags: [deep-cfr, 2-dice]

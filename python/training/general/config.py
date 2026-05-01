@@ -47,6 +47,7 @@ class AgentConfig(BaseModel):
     pool_size: int = 20
     pool_save_interval: int = 10
     eval_episodes: int = 200
+    num_workers: int = 1
 
 
 class WandbConfig(BaseModel):
