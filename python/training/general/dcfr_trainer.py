@@ -13,6 +13,7 @@ import argparse
 import logging
 import os
 import pickle
+import time
 from pathlib import Path
 
 from training.general.config import DeepCFRRunConfig
@@ -80,16 +81,23 @@ def train(cfg: DeepCFRRunConfig) -> None:
     root_state = game.new_initial_state()
 
     for it in range(start_iter, dc.num_iterations):
+        iter_start = time.time()
+        adv_losses = []
+
         # One Deep CFR iteration: traverse for each player, train advantage nets.
         for p in range(num_players):
             for _ in range(dc.num_traversals):
                 solver._traverse_game_tree(root_state, p)
             if dc.reinitialize_advantage_networks:
                 solver._reinitialize_advantage_network(p)
-            solver._learn_advantage_network(p)
+            adv_losses.append(solver._learn_advantage_network(p))
         solver._iteration += 1
 
+        iter_time = time.time() - iter_start
+
         if (it + 1) % dc.log_interval == 0:
+            import gc
+
             # Train strategy network and compute exploitability.
             solver._reinitialize_policy_network()
             policy_loss = solver._learn_strategy_network()
@@ -97,13 +105,18 @@ def train(cfg: DeepCFRRunConfig) -> None:
             avg_policy = policy.tabular_policy_from_callable(
                 game, solver.action_probabilities,
             )
-            conv = exploitability.nash_conv(game, avg_policy)
             expl = exploitability.exploitability(game, avg_policy)
 
+            adv_mem_size = sum(len(m) for m in solver._advantage_memories)
+            strat_mem_size = len(solver._strategy_memories)
+            mean_adv_loss = sum(adv_losses) / len(adv_losses) if adv_losses else 0.0
+
             logging.info(
-                "Iter %d / %d | exploitability: %.6f | nash_conv: %.6f | policy_loss: %s",
-                it + 1, dc.num_iterations, expl, conv,
+                "Iter %d / %d | expl: %.6f | adv_loss: %.4f | policy_loss: %s | "
+                "adv_mem: %d | strat_mem: %d | iter_time: %.2fs",
+                it + 1, dc.num_iterations, expl, mean_adv_loss,
                 f"{policy_loss:.6f}" if policy_loss is not None else "N/A",
+                adv_mem_size, strat_mem_size, iter_time,
             )
 
             if wb_run:
@@ -111,8 +124,13 @@ def train(cfg: DeepCFRRunConfig) -> None:
                 metrics = {
                     "iteration": it + 1,
                     "exploitability": expl,
-                    "nash_conv": conv,
+                    "advantage_loss": mean_adv_loss,
+                    "advantage_memory_size": adv_mem_size,
+                    "strategy_memory_size": strat_mem_size,
+                    "iter_time_seconds": iter_time,
                 }
+                for p, loss in enumerate(adv_losses):
+                    metrics[f"advantage_loss_p{p}"] = loss
                 if policy_loss is not None:
                     metrics["policy_loss"] = policy_loss
                 wandb.log(metrics)
@@ -120,6 +138,9 @@ def train(cfg: DeepCFRRunConfig) -> None:
             cp = {"solver": solver, "iteration": it + 1}
             with open(checkpoint_path, "wb") as f:
                 pickle.dump(cp, f)
+
+            del avg_policy
+            gc.collect()
 
     # Final strategy network training and evaluation.
     solver._reinitialize_policy_network()
