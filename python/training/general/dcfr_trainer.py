@@ -102,11 +102,15 @@ def train(cfg: DeepCFRRunConfig) -> None:
         if (it + 1) % dc.log_interval == 0:
             adv_mem_size = sum(len(m) for m in solver._advantage_memories)
             strat_mem_size = len(solver._strategy_memories)
-            mean_adv_loss = sum(adv_losses) / len(adv_losses) if adv_losses else 0.0
+            valid_losses = [l for l in adv_losses if l is not None]
+            mean_adv_loss = (
+                sum(valid_losses) / len(valid_losses) if valid_losses else None
+            )
 
+            adv_loss_str = f"{mean_adv_loss:.4f}" if mean_adv_loss is not None else "N/A"
             logging.info(
-                "Iter %d / %d | adv_loss: %.4f | adv_mem: %d | strat_mem: %d | iter_time: %.2fs",
-                it + 1, dc.num_iterations, mean_adv_loss,
+                "Iter %d / %d | adv_loss: %s | adv_mem: %d | strat_mem: %d | iter_time: %.2fs",
+                it + 1, dc.num_iterations, adv_loss_str,
                 adv_mem_size, strat_mem_size, iter_time,
             )
 
@@ -114,13 +118,15 @@ def train(cfg: DeepCFRRunConfig) -> None:
                 import wandb
                 metrics = {
                     "iteration": it + 1,
-                    "advantage_loss": mean_adv_loss,
                     "advantage_memory_size": adv_mem_size,
                     "strategy_memory_size": strat_mem_size,
                     "iter_time_seconds": iter_time,
                 }
+                if mean_adv_loss is not None:
+                    metrics["advantage_loss"] = mean_adv_loss
                 for p, loss in enumerate(adv_losses):
-                    metrics[f"advantage_loss_p{p}"] = loss
+                    if loss is not None:
+                        metrics[f"advantage_loss_p{p}"] = loss
                 wandb.log(metrics)
 
             cp = {"solver": solver, "iteration": it + 1}
